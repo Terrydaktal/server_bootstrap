@@ -76,11 +76,121 @@ configure_ufw() {
   ufw --force reset
   ufw default deny incoming
   ufw default allow outgoing
-  ufw allow OpenSSH
+
+  # Rate-limit SSH
+  ufw limit OpenSSH
+
   ufw allow 80/tcp
   ufw allow 443/tcp
+
+  # Enable firewall logging
+  ufw logging medium
+
   ufw --force enable
   ufw status verbose
+}
+
+configure_fail2ban_overrides() {
+  # Overrides Debian's defaults-debian.conf without editing it
+  log "Configuring Fail2ban overrides (force UFW banaction, keep systemd backend)"
+
+  install -d -m 755 /etc/fail2ban/jail.d
+
+  cat >/etc/fail2ban/jail.d/99-local-defaults.conf <<'EOF'
+[DEFAULT]
+backend = systemd
+banaction = ufw
+
+findtime = 10m
+maxretry = 5
+bantime  = 12h
+
+ignoreip = 127.0.0.1/8 ::1
+EOF
+
+  cat >/etc/fail2ban/jail.d/99-local-core.conf <<'EOF'
+[sshd]
+enabled = true
+mode = aggressive
+EOF
+
+  # Validate config and restart (hard fail if invalid)
+  fail2ban-server -t
+  systemctl restart fail2ban
+
+  # Show what jails are active and confirm the effective banaction
+  fail2ban-client status || true
+  fail2ban-client get sshd banaction 2>/dev/null || true
+}
+
+enable_unattended_upgrades() {
+  log "Installing and enabling unattended-upgrades"
+  apt-get install -y unattended-upgrades
+
+  # This is interactive in some environments; -plow keeps it minimal.
+  # It may still open a debconf prompt depending on the distro image.
+  dpkg-reconfigure -plow unattended-upgrades || true
+
+  # Try to ensure the timer is enabled (harmless if it doesn't exist)
+  systemctl enable --now unattended-upgrades 2>/dev/null || true
+}
+
+harden_php_apache_ini() {
+  log "Hardening PHP settings in /etc/php/*/apache2/php.ini"
+
+  # Patch all apache2 php.ini files (covers PHP 8.1/8.2/8.3 etc.)
+  local ini
+  shopt -s nullglob
+  for ini in /etc/php/*/apache2/php.ini; do
+    log "Patching $ini"
+
+    # Ensure keys exist and are set correctly, regardless of commented state
+    perl -0777 -i -pe '
+      s/^[ \t]*;?[ \t]*expose_php[ \t]*=.*/expose_php = Off/mg;
+      s/^[ \t]*;?[ \t]*display_errors[ \t]*=.*/display_errors = Off/mg;
+      s/^[ \t]*;?[ \t]*log_errors[ \t]*=.*/log_errors = On/mg;
+
+      s/^[ \t]*;?[ \t]*session\.cookie_secure[ \t]*=.*/session.cookie_secure = 1/mg;
+      s/^[ \t]*;?[ \t]*session\.cookie_httponly[ \t]*=.*/session.cookie_httponly = 1/mg;
+      s/^[ \t]*;?[ \t]*session\.cookie_samesite[ \t]*=.*/session.cookie_samesite = Lax/mg;
+    ' "$ini"
+
+    # If any directives were absent entirely, append them.
+    grep -qE '^\s*expose_php\s*=' "$ini" || echo "expose_php = Off" >>"$ini"
+    grep -qE '^\s*display_errors\s*=' "$ini" || echo "display_errors = Off" >>"$ini"
+    grep -qE '^\s*log_errors\s*=' "$ini" || echo "log_errors = On" >>"$ini"
+
+    grep -qE '^\s*session\.cookie_secure\s*=' "$ini" || echo "session.cookie_secure = 1" >>"$ini"
+    grep -qE '^\s*session\.cookie_httponly\s*=' "$ini" || echo "session.cookie_httponly = 1" >>"$ini"
+    grep -qE '^\s*session\.cookie_samesite\s*=' "$ini" || echo "session.cookie_samesite = Lax" >>"$ini"
+  done
+  shopt -u nullglob
+
+  # Reload apache to apply mod_php config changes
+  systemctl reload apache2
+}
+
+configure_apache_security_hardening_conf() {
+  log "Writing Apache security hardening conf"
+
+  cat >/etc/apache2/conf-available/security-hardening.conf <<'EOF'
+# --- Enforced by bootstrap ---
+ServerTokens Prod
+ServerSignature Off
+TraceEnable Off
+
+# Sensible defaults
+FileETag None
+
+# Basic hardening headers (global, can be overridden per-vhost)
+Header always set X-Content-Type-Options "nosniff"
+Header always set X-Frame-Options "SAMEORIGIN"
+Header always set Referrer-Policy "strict-origin-when-cross-origin"
+EOF
+
+  a2enconf security-hardening >/dev/null || true
+  apache2ctl configtest
+  systemctl reload apache2
 }
 
 # ----------------------------
@@ -92,6 +202,7 @@ apt-get upgrade -y
 
 apt-get install -y \
   fish curl ca-certificates gnupg lsb-release \
+  git \
   apache2 \
   php libapache2-mod-php php-mysql php-cli php-curl php-zip php-gd php-mbstring php-xml php-json \
   mariadb-server \
@@ -109,7 +220,17 @@ systemctl enable --now mariadb
 systemctl enable --now fail2ban
 
 # ----------------------------
-# 3) Apache global tuning (non-site-specific)
+# 2.1) Fail2ban baseline overrides
+# ----------------------------
+configure_fail2ban_overrides
+
+# ----------------------------
+# 2.2) Unattended security upgrades
+# ----------------------------
+enable_unattended_upgrades
+
+# ----------------------------
+# 3) Apache global tuning + hardening (non-site-specific)
 # ----------------------------
 log "Configuring Apache global modules/settings"
 a2enmod rewrite headers >/dev/null || true
@@ -119,11 +240,18 @@ if ! grep -qE '^\s*DirectoryIndex\s+index\.php\s+index\.html\b' /etc/apache2/mod
   echo "DirectoryIndex index.php index.html" >> /etc/apache2/mods-enabled/dir.conf
 fi
 
+configure_apache_security_hardening_conf
+
 apache2ctl configtest
 systemctl reload apache2
 
 # ----------------------------
-# 4) Create deploy user (idempotent)
+# 4) PHP hardening for mod_php (apache2 php.ini)
+# ----------------------------
+harden_php_apache_ini
+
+# ----------------------------
+# 5) Create deploy user (idempotent)
 # ----------------------------
 log "Ensuring deploy user exists: $DEPLOY_USER"
 if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
@@ -132,7 +260,7 @@ fi
 usermod -aG sudo "$DEPLOY_USER"
 
 # ----------------------------
-# 5) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
+# 6) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
 # ----------------------------
 log "Installing GitHub SSH keys for root and $DEPLOY_USER from $GH_KEYS_URL"
 install_github_keys_for_user root
@@ -140,21 +268,21 @@ install_github_keys_for_user "$DEPLOY_USER"
 log "OK: keys installed for root + $DEPLOY_USER"
 
 # ----------------------------
-# 6) Harden SSH (keys only)
+# 7) Harden SSH (keys only)
 # ----------------------------
 log "Hardening SSH daemon (disabling password auth etc.)"
 harden_sshd
 log "OK: ssh hardened"
 
 # ----------------------------
-# 7) Firewall baseline (do this after SSH is validated)
+# 8) Firewall baseline (do this after SSH is validated)
 # ----------------------------
 log "Configuring UFW firewall"
 configure_ufw
 log "OK: UFW configured"
 
 # ----------------------------
-# 8) Optional: MariaDB hardening reminder
+# 9) Optional: MariaDB hardening reminder
 # ----------------------------
 log "NOTE: run mysql_secure_installation manually if you want interactive hardening"
 
