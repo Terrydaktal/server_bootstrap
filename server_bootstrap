@@ -34,28 +34,39 @@ install_github_keys_for_user() {
 }
 
 harden_sshd() {
+  log "Hardening SSH: enforce settings via /etc/ssh/sshd_config.d/00-bootstrap.conf (first-match-wins safe)"
+
   # Backup once per run
   local ts="/root/ssh-backup-$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$ts"
   cp -a /etc/ssh/sshd_config "$ts/sshd_config"
   cp -a /etc/ssh/sshd_config.d "$ts/sshd_config.d" 2>/dev/null || true
 
-  # Remove all drop-ins to eliminate conflicts (cloud-init etc.)
-  rm -f /etc/ssh/sshd_config.d/*.conf
+  # Ensure drop-in directory exists
+  install -d -m 755 /etc/ssh/sshd_config.d
 
-  # Remove any existing occurrences of our directives from the main file
+  # 1) Fix main sshd_config so it cannot interfere:
+  #    - Ensure Include line exists
+  #    - Ensure it is FIRST line (or near-top) so no prior directives can "lock in" first-match-wins
+  local include_line="Include /etc/ssh/sshd_config.d/*.conf"
+
+  # Remove any existing Include lines (we'll re-add at very top for determinism)
+  perl -0777 -i -pe '
+    s/^[ \t]*Include[ \t]+\/etc\/ssh\/sshd_config\.d\/\*\.conf[ \t]*\R//gmi
+  ' /etc/ssh/sshd_config
+
+  # Insert Include at the very top
+  sed -i "1i$include_line" /etc/ssh/sshd_config
+
+  # Remove any existing occurrences of our enforced directives from the main file
+  # because sshd uses first-match-wins for these options.
   perl -0777 -i -pe '
     s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM)[ \t]+.*\R//gmi
   ' /etc/ssh/sshd_config
 
-  # Keep Include line (harmless even if empty)
-  grep -qE '^\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config \
-    || sed -i '1iInclude /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
-
-  # Append enforced settings (last wins)
-  cat >> /etc/ssh/sshd_config <<'EOF'
-
-# --- Enforced by bootstrap ---
+  # 2) Write enforced settings into 00-bootstrap.conf (loads before 50-cloud-init.conf)
+  cat >/etc/ssh/sshd_config.d/00-bootstrap.conf <<'EOF'
+# --- Enforced by bootstrap (00-bootstrap.conf loads first; sshd is first-match-wins) ---
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
@@ -63,11 +74,14 @@ PubkeyAuthentication yes
 UsePAM yes
 EOF
 
+  chmod 0644 /etc/ssh/sshd_config.d/00-bootstrap.conf
+  chown root:root /etc/ssh/sshd_config.d/00-bootstrap.conf
+
   # Validate and restart
   sshd -t
   systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
 
-  # Show effective values
+  # Show effective values (authoritative)
   sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|pubkeyauthentication|usepam)\b'
 }
 
@@ -127,24 +141,20 @@ enable_unattended_upgrades() {
   log "Installing and enabling unattended-upgrades"
   apt-get install -y unattended-upgrades
 
-  # This is interactive in some environments; -plow keeps it minimal.
-  # It may still open a debconf prompt depending on the distro image.
+  # May be interactive depending on image; keep script resilient
   dpkg-reconfigure -plow unattended-upgrades || true
 
-  # Try to ensure the timer is enabled (harmless if it doesn't exist)
   systemctl enable --now unattended-upgrades 2>/dev/null || true
 }
 
 harden_php_apache_ini() {
   log "Hardening PHP settings in /etc/php/*/apache2/php.ini"
 
-  # Patch all apache2 php.ini files (covers PHP 8.1/8.2/8.3 etc.)
   local ini
   shopt -s nullglob
   for ini in /etc/php/*/apache2/php.ini; do
     log "Patching $ini"
 
-    # Ensure keys exist and are set correctly, regardless of commented state
     perl -0777 -i -pe '
       s/^[ \t]*;?[ \t]*expose_php[ \t]*=.*/expose_php = Off/mg;
       s/^[ \t]*;?[ \t]*display_errors[ \t]*=.*/display_errors = Off/mg;
@@ -155,7 +165,7 @@ harden_php_apache_ini() {
       s/^[ \t]*;?[ \t]*session\.cookie_samesite[ \t]*=.*/session.cookie_samesite = Lax/mg;
     ' "$ini"
 
-    # If any directives were absent entirely, append them.
+    # Append any directives missing entirely (belt-and-braces)
     grep -qE '^\s*expose_php\s*=' "$ini" || echo "expose_php = Off" >>"$ini"
     grep -qE '^\s*display_errors\s*=' "$ini" || echo "display_errors = Off" >>"$ini"
     grep -qE '^\s*log_errors\s*=' "$ini" || echo "log_errors = On" >>"$ini"
@@ -166,7 +176,6 @@ harden_php_apache_ini() {
   done
   shopt -u nullglob
 
-  # Reload apache to apply mod_php config changes
   systemctl reload apache2
 }
 
@@ -268,9 +277,9 @@ install_github_keys_for_user "$DEPLOY_USER"
 log "OK: keys installed for root + $DEPLOY_USER"
 
 # ----------------------------
-# 7) Harden SSH (keys only)
+# 7) Harden SSH (enforced via 00-bootstrap.conf)
 # ----------------------------
-log "Hardening SSH daemon (disabling password auth etc.)"
+log "Hardening SSH daemon (enforced via 00-bootstrap.conf; fixing sshd_config interference)"
 harden_sshd
 log "OK: ssh hardened"
 
