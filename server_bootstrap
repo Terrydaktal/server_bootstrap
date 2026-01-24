@@ -6,6 +6,9 @@ set -euo pipefail
 # ----------------------------
 DEPLOY_USER="lewis"
 GH_KEYS_URL="https://github.com/Terrydaktal.keys"
+SWAPFILE_PATH="/swapfile"
+SWAP_SIZE="1G"
+JOURNAL_CAP="200M"
 
 # ----------------------------
 # Helpers
@@ -33,6 +36,68 @@ install_github_keys_for_user() {
   done
 }
 
+configure_swap_1g_if_missing() {
+  log "Ensuring 1GB swap exists (idempotent)"
+
+  # If any swap is active, do nothing.
+  if swapon --show --noheadings 2>/dev/null | grep -q .; then
+    log "Swap already active:"
+    swapon --show
+    return 0
+  fi
+
+  # If swapfile exists but isn't active, try enabling it.
+  if [[ -f "$SWAPFILE_PATH" ]]; then
+    log "Swapfile exists at $SWAPFILE_PATH but is not active; attempting to enable"
+    chmod 600 "$SWAPFILE_PATH" || true
+    mkswap "$SWAPFILE_PATH" >/dev/null 2>&1 || true
+    swapon "$SWAPFILE_PATH"
+  else
+    log "No active swap found; creating $SWAP_SIZE swapfile at $SWAPFILE_PATH"
+
+    # Create file (prefer fallocate; fallback to dd)
+    if command -v fallocate >/dev/null 2>&1; then
+      fallocate -l "$SWAP_SIZE" "$SWAPFILE_PATH"
+    else
+      # 1GiB = 1024 blocks of 1MiB
+      dd if=/dev/zero of="$SWAPFILE_PATH" bs=1M count=1024 status=progress
+    fi
+
+    chmod 600 "$SWAPFILE_PATH"
+    mkswap "$SWAPFILE_PATH"
+    swapon "$SWAPFILE_PATH"
+  fi
+
+  # Persist in fstab (idempotent)
+  if ! grep -qE "^[[:space:]]*${SWAPFILE_PATH//\//\\/}[[:space:]]+none[[:space:]]+swap[[:space:]]" /etc/fstab; then
+    log "Adding swapfile to /etc/fstab"
+    echo "$SWAPFILE_PATH none swap sw 0 0" >> /etc/fstab
+  fi
+
+  log "Swap status:"
+  swapon --show
+  free -h
+}
+
+cap_and_shrink_journal() {
+  log "Capping and shrinking systemd journal to $JOURNAL_CAP"
+
+  install -d -m 755 /etc/systemd/journald.conf.d
+
+  cat >/etc/systemd/journald.conf.d/99-size-limit.conf <<EOF
+[Journal]
+SystemMaxUse=$JOURNAL_CAP
+EOF
+
+  systemctl restart systemd-journald
+
+  # Shrink existing logs down to cap (idempotent)
+  journalctl --vacuum-size="$JOURNAL_CAP" >/dev/null 2>&1 || true
+
+  log "Journal disk usage:"
+  journalctl --disk-usage || true
+}
+
 harden_sshd() {
   log "Hardening SSH: enforce settings via /etc/ssh/sshd_config.d/00-bootstrap.conf (first-match-wins safe)"
 
@@ -45,12 +110,12 @@ harden_sshd() {
   # Ensure drop-in directory exists
   install -d -m 755 /etc/ssh/sshd_config.d
 
-  # 1) Fix main sshd_config so it cannot interfere:
-  #    - Ensure Include line exists
-  #    - Ensure it is FIRST line (or near-top) so no prior directives can "lock in" first-match-wins
+  # Fix main sshd_config so it cannot interfere (first-match-wins):
+  # - Force Include line to be first
+  # - Remove any conflicting directives from the main file
   local include_line="Include /etc/ssh/sshd_config.d/*.conf"
 
-  # Remove any existing Include lines (we'll re-add at very top for determinism)
+  # Remove any existing Include lines; we will re-add at very top
   perl -0777 -i -pe '
     s/^[ \t]*Include[ \t]+\/etc\/ssh\/sshd_config\.d\/\*\.conf[ \t]*\R//gmi
   ' /etc/ssh/sshd_config
@@ -58,20 +123,32 @@ harden_sshd() {
   # Insert Include at the very top
   sed -i "1i$include_line" /etc/ssh/sshd_config
 
-  # Remove any existing occurrences of our enforced directives from the main file
-  # because sshd uses first-match-wins for these options.
+  # Remove occurrences of directives we manage to avoid first-match lock-in
   perl -0777 -i -pe '
-    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM)[ \t]+.*\R//gmi
+    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM|MaxAuthTries|LoginGraceTime|ClientAliveInterval|ClientAliveCountMax|X11Forwarding|AllowAgentForwarding|PermitTunnel)[ \t]+.*\R//gmi
   ' /etc/ssh/sshd_config
 
-  # 2) Write enforced settings into 00-bootstrap.conf (loads before 50-cloud-init.conf)
+  # Enforced settings in 00-bootstrap.conf (loads before 50-cloud-init.conf)
   cat >/etc/ssh/sshd_config.d/00-bootstrap.conf <<'EOF'
 # --- Enforced by bootstrap (00-bootstrap.conf loads first; sshd is first-match-wins) ---
+
+# Keys-only auth
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
 PubkeyAuthentication yes
 UsePAM yes
+
+# Brute-force / connection hygiene
+MaxAuthTries 10
+LoginGraceTime 20
+ClientAliveInterval 300
+ClientAliveCountMax 3
+
+# Disable features rarely needed on a web server
+X11Forwarding no
+AllowAgentForwarding no
+PermitTunnel no
 EOF
 
   chmod 0644 /etc/ssh/sshd_config.d/00-bootstrap.conf
@@ -82,7 +159,7 @@ EOF
   systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
 
   # Show effective values (authoritative)
-  sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|pubkeyauthentication|usepam)\b'
+  sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|pubkeyauthentication|usepam|maxauthtries|logingracetime|clientaliveinterval|clientalivecountmax|x11forwarding|allowagentforwarding|permittunnel)\b'
 }
 
 configure_ufw() {
@@ -128,11 +205,10 @@ enabled = true
 mode = aggressive
 EOF
 
-  # Validate config and restart (hard fail if invalid)
+  # Validate config and restart
   fail2ban-server -t
   systemctl restart fail2ban
 
-  # Show what jails are active and confirm the effective banaction
   fail2ban-client status || true
   fail2ban-client get sshd banaction 2>/dev/null || true
 }
@@ -141,7 +217,7 @@ enable_unattended_upgrades() {
   log "Installing and enabling unattended-upgrades"
   apt-get install -y unattended-upgrades
 
-  # May be interactive depending on image; keep script resilient
+  # Can be interactive depending on image; keep script resilient
   dpkg-reconfigure -plow unattended-upgrades || true
 
   systemctl enable --now unattended-upgrades 2>/dev/null || true
@@ -165,7 +241,7 @@ harden_php_apache_ini() {
       s/^[ \t]*;?[ \t]*session\.cookie_samesite[ \t]*=.*/session.cookie_samesite = Lax/mg;
     ' "$ini"
 
-    # Append any directives missing entirely (belt-and-braces)
+    # Append directives if absent
     grep -qE '^\s*expose_php\s*=' "$ini" || echo "expose_php = Off" >>"$ini"
     grep -qE '^\s*display_errors\s*=' "$ini" || echo "display_errors = Off" >>"$ini"
     grep -qE '^\s*log_errors\s*=' "$ini" || echo "log_errors = On" >>"$ini"
@@ -219,6 +295,12 @@ apt-get install -y \
   certbot python3-certbot-apache \
   fail2ban \
   ufw
+
+# ----------------------------
+# 1.1) Swap + journal hygiene early
+# ----------------------------
+configure_swap_1g_if_missing
+cap_and_shrink_journal
 
 # ----------------------------
 # 2) Enable/Start core services
