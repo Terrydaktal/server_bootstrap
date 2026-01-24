@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ----------------------------
+# Config
+# ----------------------------
+DEPLOY_USER="lewis"
+GH_KEYS_URL="https://github.com/Terrydaktal.keys"
+
+# ----------------------------
+# Helpers
+# ----------------------------
+log(){ echo "[$(date -Is)] $*"; }
+
+install_github_keys_for_user() {
+  local user="$1" home
+  home="$(getent passwd "$user" | cut -d: -f6)"
+
+  if [[ -z "$home" || ! -d "$home" ]]; then
+    log "ERROR: Cannot determine home directory for user: $user"
+    exit 1
+  fi
+
+  install -d -m 700 -o "$user" -g "$user" "$home/.ssh"
+  touch "$home/.ssh/authorized_keys"
+  chown "$user:$user" "$home/.ssh/authorized_keys"
+  chmod 600 "$home/.ssh/authorized_keys"
+
+  # Append keys if missing (idempotent)
+  curl -fsSL "$GH_KEYS_URL" | while IFS= read -r k; do
+    [[ -z "$k" ]] && continue
+    grep -qxF "$k" "$home/.ssh/authorized_keys" || echo "$k" >> "$home/.ssh/authorized_keys"
+  done
+}
+
+harden_sshd() {
+  # Backup once per run
+  local ts="/root/ssh-backup-$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$ts"
+  cp -a /etc/ssh/sshd_config "$ts/sshd_config"
+  cp -a /etc/ssh/sshd_config.d "$ts/sshd_config.d" 2>/dev/null || true
+
+  # Remove all drop-ins to eliminate conflicts (cloud-init etc.)
+  rm -f /etc/ssh/sshd_config.d/*.conf
+
+  # Remove any existing occurrences of our directives from the main file
+  perl -0777 -i -pe '
+    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM)[ \t]+.*\R//gmi
+  ' /etc/ssh/sshd_config
+
+  # Keep Include line (harmless even if empty)
+  grep -qE '^\s*Include\s+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config \
+    || sed -i '1iInclude /etc/ssh/sshd_config.d/*.conf' /etc/ssh/sshd_config
+
+  # Append enforced settings (last wins)
+  cat >> /etc/ssh/sshd_config <<'EOF'
+
+# --- Enforced by bootstrap ---
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+UsePAM yes
+EOF
+
+  # Validate and restart
+  sshd -t
+  systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+
+  # Show effective values
+  sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|pubkeyauthentication|usepam)\b'
+}
+
+configure_ufw() {
+  # Baseline: deny inbound except SSH/HTTP/HTTPS
+  ufw --force reset
+  ufw default deny incoming
+  ufw default allow outgoing
+  ufw allow OpenSSH
+  ufw allow 80/tcp
+  ufw allow 443/tcp
+  ufw --force enable
+  ufw status verbose
+}
+
+# ----------------------------
+# 1) OS updates + baseline packages
+# ----------------------------
+log "Updating system and installing baseline packages"
+apt-get update -y
+apt-get upgrade -y
+
+apt-get install -y \
+  fish curl ca-certificates gnupg lsb-release \
+  apache2 \
+  php libapache2-mod-php php-mysql php-cli php-curl php-zip php-gd php-mbstring php-xml php-json \
+  mariadb-server \
+  composer \
+  certbot python3-certbot-apache \
+  fail2ban \
+  ufw
+
+# ----------------------------
+# 2) Enable/Start core services
+# ----------------------------
+log "Enabling and starting services"
+systemctl enable --now apache2
+systemctl enable --now mariadb
+systemctl enable --now fail2ban
+
+# ----------------------------
+# 3) Apache global tuning (non-site-specific)
+# ----------------------------
+log "Configuring Apache global modules/settings"
+a2enmod rewrite headers >/dev/null || true
+
+# Ensure DirectoryIndex prefers index.php
+if ! grep -qE '^\s*DirectoryIndex\s+index\.php\s+index\.html\b' /etc/apache2/mods-enabled/dir.conf; then
+  echo "DirectoryIndex index.php index.html" >> /etc/apache2/mods-enabled/dir.conf
+fi
+
+apache2ctl configtest
+systemctl reload apache2
+
+# ----------------------------
+# 4) Create deploy user (idempotent)
+# ----------------------------
+log "Ensuring deploy user exists: $DEPLOY_USER"
+if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
+  adduser --disabled-password --gecos "" "$DEPLOY_USER"
+fi
+usermod -aG sudo "$DEPLOY_USER"
+
+# ----------------------------
+# 5) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
+# ----------------------------
+log "Installing GitHub SSH keys for root and $DEPLOY_USER from $GH_KEYS_URL"
+install_github_keys_for_user root
+install_github_keys_for_user "$DEPLOY_USER"
+log "OK: keys installed for root + $DEPLOY_USER"
+
+# ----------------------------
+# 6) Harden SSH (keys only)
+# ----------------------------
+log "Hardening SSH daemon (disabling password auth etc.)"
+harden_sshd
+log "OK: ssh hardened"
+
+# ----------------------------
+# 7) Firewall baseline (do this after SSH is validated)
+# ----------------------------
+log "Configuring UFW firewall"
+configure_ufw
+log "OK: UFW configured"
+
+# ----------------------------
+# 8) Optional: MariaDB hardening reminder
+# ----------------------------
+log "NOTE: run mysql_secure_installation manually if you want interactive hardening"
+
+log "DONE"
