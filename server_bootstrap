@@ -163,21 +163,47 @@ EOF
 }
 
 configure_ufw() {
-  # Baseline: deny inbound except SSH/HTTP/HTTPS
-  ufw --force reset
+  log "Configuring UFW firewall (idempotent)"
+
+  # Only reset if we are starting fresh or strictly enforcing (optional).
+  # For "run at any stage", we avoid 'ufw force reset' to preserve custom rules
+  # UNLESS the user explicitly wants a hard reset.
+  # Here we just ensure our baseline rules are present.
+
   ufw default deny incoming
   ufw default allow outgoing
 
   # Rate-limit SSH
-  ufw limit OpenSSH
+  if ! ufw status | grep -q "OpenSSH.*LIMIT"; then
+      log "Applying UFW limit on OpenSSH"
+      ufw limit OpenSSH
+  else
+      log "UFW OpenSSH limit already set"
+  fi
 
-  ufw allow 80/tcp
-  ufw allow 443/tcp
+  # HTTP/HTTPS
+  if ! ufw status | grep -q "80/tcp.*ALLOW"; then
+      log "Allowing port 80/tcp"
+      ufw allow 80/tcp
+  fi
+  
+  if ! ufw status | grep -q "443/tcp.*ALLOW"; then
+      log "Allowing port 443/tcp"
+      ufw allow 443/tcp
+  fi
 
-  # Enable firewall logging
+  # Enable firewall logging if not set
+  # 'ufw logging' doesn't easily show status in a grep-friendly way, just re-apply (safe)
   ufw logging medium
 
-  ufw --force enable
+  # Enable if not enabled
+  if ! ufw status | grep -q "Status: active"; then
+      log "Enabling UFW"
+      ufw --force enable
+  else
+      log "UFW is already active"
+  fi
+  
   ufw status verbose
 }
 
