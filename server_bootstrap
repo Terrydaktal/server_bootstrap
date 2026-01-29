@@ -235,7 +235,7 @@ banaction = ufw
 
 findtime = 10m
 maxretry = 5
-bantime  = 12h
+bantime  = 1h
 
 ignoreip = 127.0.0.1/8 ::1
 EOF
@@ -243,7 +243,7 @@ EOF
   cat >/etc/fail2ban/jail.d/99-local-core.conf <<'EOF'
 [sshd]
 enabled = true
-mode = aggressive
+mode = normal
 EOF
 
   # Validate config and restart
