@@ -11,6 +11,19 @@ SWAP_SIZE="1G"
 JOURNAL_CAP="200M"
 
 # ----------------------------
+# Parse Args
+# ----------------------------
+INSTALL_LAMP=false
+INSTALL_GAP=false
+for arg in "$@"; do
+  if [[ "$arg" == "--LAMP" ]]; then
+    INSTALL_LAMP=true
+  elif [[ "$arg" == "--GAP" ]]; then
+    INSTALL_GAP=true
+  fi
+done
+
+# ----------------------------
 # Helpers
 # ----------------------------
 log(){ echo "[$(date -Is)] $*"; }
@@ -182,14 +195,16 @@ configure_ufw() {
   fi
 
   # HTTP/HTTPS
-  if ! ufw status | grep -q "80/tcp.*ALLOW"; then
-      log "Allowing port 80/tcp"
-      ufw allow 80/tcp
-  fi
-  
-  if ! ufw status | grep -q "443/tcp.*ALLOW"; then
-      log "Allowing port 443/tcp"
-      ufw allow 443/tcp
+  if [[ "$INSTALL_LAMP" == "true" || "$INSTALL_GAP" == "true" ]]; then
+    if ! ufw status | grep -q "80/tcp.*ALLOW"; then
+        log "Allowing port 80/tcp"
+        ufw allow 80/tcp
+    fi
+    
+    if ! ufw status | grep -q "443/tcp.*ALLOW"; then
+        log "Allowing port 443/tcp"
+        ufw allow 443/tcp
+    fi
   fi
 
   # Enable firewall logging if not set
@@ -311,16 +326,38 @@ log "Updating system and installing baseline packages"
 apt-get update -y
 apt-get upgrade -y
 
-apt-get install -y \
-  fish curl ca-certificates gnupg lsb-release \
-  git \
-  apache2 \
-  php libapache2-mod-php php-mysql php-cli php-curl php-zip php-gd php-mbstring php-xml php-json \
-  mariadb-server \
-  composer \
-  certbot python3-certbot-apache \
-  fail2ban \
+BASE_PACKAGES=(
+  fish curl ca-certificates gnupg lsb-release
+  git
+  fail2ban
   ufw
+)
+
+LAMP_PACKAGES=(
+  apache2
+  php libapache2-mod-php php-mysql php-cli php-curl php-zip php-gd php-mbstring php-xml php-json
+  mariadb-server
+  composer
+  certbot python3-certbot-apache
+)
+
+GAP_PACKAGES=(
+  golang-go
+  nginx
+  postgresql postgresql-contrib
+)
+
+apt-get install -y "${BASE_PACKAGES[@]}"
+
+if [[ "$INSTALL_LAMP" == "true" ]]; then
+  log "Installing LAMP stack packages"
+  apt-get install -y "${LAMP_PACKAGES[@]}"
+fi
+
+if [[ "$INSTALL_GAP" == "true" ]]; then
+  log "Installing GAP stack packages"
+  apt-get install -y "${GAP_PACKAGES[@]}"
+fi
 
 # ----------------------------
 # 1.1) Swap + journal hygiene early
@@ -332,8 +369,16 @@ cap_and_shrink_journal
 # 2) Enable/Start core services
 # ----------------------------
 log "Enabling and starting services"
-systemctl enable --now apache2
-systemctl enable --now mariadb
+if [[ "$INSTALL_LAMP" == "true" ]]; then
+  systemctl enable --now apache2
+  systemctl enable --now mariadb
+fi
+
+if [[ "$INSTALL_GAP" == "true" ]]; then
+  systemctl enable --now nginx
+  systemctl enable --now postgresql
+fi
+
 systemctl enable --now fail2ban
 
 # ----------------------------
@@ -346,26 +391,28 @@ configure_fail2ban_overrides
 # ----------------------------
 enable_unattended_upgrades
 
-# ----------------------------
-# 3) Apache global tuning + hardening (non-site-specific)
-# ----------------------------
-log "Configuring Apache global modules/settings"
-a2enmod rewrite headers >/dev/null || true
+if [[ "$INSTALL_LAMP" == "true" ]]; then
+  # ----------------------------
+  # 3) Apache global tuning + hardening (non-site-specific)
+  # ----------------------------
+  log "Configuring Apache global modules/settings"
+  a2enmod rewrite headers >/dev/null || true
 
-# Ensure DirectoryIndex prefers index.php
-if ! grep -qE '^\s*DirectoryIndex\s+index\.php\s+index\.html\b' /etc/apache2/mods-enabled/dir.conf; then
-  echo "DirectoryIndex index.php index.html" >> /etc/apache2/mods-enabled/dir.conf
+  # Ensure DirectoryIndex prefers index.php
+  if ! grep -qE '^\s*DirectoryIndex\s+index\.php\s+index\.html\b' /etc/apache2/mods-enabled/dir.conf; then
+    echo "DirectoryIndex index.php index.html" >> /etc/apache2/mods-enabled/dir.conf
+  fi
+
+  configure_apache_security_hardening_conf
+
+  apache2ctl configtest
+  systemctl reload apache2
+
+  # ----------------------------
+  # 4) PHP hardening for mod_php (apache2 php.ini)
+  # ----------------------------
+  harden_php_apache_ini
 fi
-
-configure_apache_security_hardening_conf
-
-apache2ctl configtest
-systemctl reload apache2
-
-# ----------------------------
-# 4) PHP hardening for mod_php (apache2 php.ini)
-# ----------------------------
-harden_php_apache_ini
 
 # ----------------------------
 # 5) Create deploy user (idempotent)
@@ -401,6 +448,8 @@ log "OK: UFW configured"
 # ----------------------------
 # 9) Optional: MariaDB hardening reminder
 # ----------------------------
-log "NOTE: run mysql_secure_installation manually if you want interactive hardening"
+if [[ "$INSTALL_LAMP" == "true" ]]; then
+  log "NOTE: run mysql_secure_installation manually if you want interactive hardening"
+fi
 
 log "DONE"
