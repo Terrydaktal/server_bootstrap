@@ -348,16 +348,35 @@ GAP_PACKAGES=(
   certbot python3-certbot-nginx
 )
 
-apt-get install -y "${BASE_PACKAGES[@]}"
+apt_install_if_missing() {
+  local pkgs=("$@")
+  local to_install=()
+  for pkg in "${pkgs[@]}"; do
+    if dpkg -l "$pkg" >/dev/null 2>&1; then
+      log "Package '$pkg' is already installed, skipping."
+    else
+      to_install+=("$pkg")
+    fi
+  done
+
+  if [[ ${#to_install[@]} -gt 0 ]]; then
+    log "Installing missing packages: ${to_install[*]}"
+    apt-get install -y "${to_install[@]}"
+  else
+    log "All requested packages are already installed."
+  fi
+}
+
+apt_install_if_missing "${BASE_PACKAGES[@]}"
 
 if [[ "$INSTALL_LAMP" == "true" ]]; then
-  log "Installing LAMP stack packages"
-  apt-get install -y "${LAMP_PACKAGES[@]}"
+  log "Checking LAMP stack packages"
+  apt_install_if_missing "${LAMP_PACKAGES[@]}"
 fi
 
 if [[ "$INSTALL_GAP" == "true" ]]; then
-  log "Installing GAP stack packages"
-  apt-get install -y "${GAP_PACKAGES[@]}"
+  log "Checking GAP stack packages"
+  apt_install_if_missing "${GAP_PACKAGES[@]}"
 fi
 
 # ----------------------------
@@ -419,10 +438,19 @@ fi
 # 5) Create deploy user (idempotent)
 # ----------------------------
 log "Ensuring deploy user exists: $DEPLOY_USER"
-if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
+if id "$DEPLOY_USER" >/dev/null 2>&1; then
+  log "User '$DEPLOY_USER' already exists, skipping creation."
+else
+  log "Creating user '$DEPLOY_USER'..."
   adduser --disabled-password --gecos "" "$DEPLOY_USER"
 fi
-usermod -aG sudo "$DEPLOY_USER"
+
+if groups "$DEPLOY_USER" | grep -q "\bsudo\b"; then
+  log "User '$DEPLOY_USER' is already in sudo group, skipping."
+else
+  log "Adding user '$DEPLOY_USER' to sudo group..."
+  usermod -aG sudo "$DEPLOY_USER"
+fi
 
 # ----------------------------
 # 6) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
