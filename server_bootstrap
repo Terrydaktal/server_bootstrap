@@ -322,6 +322,8 @@ EOF
 # ----------------------------
 # 1) OS updates + baseline packages
 # ----------------------------
+sudo passwd
+
 log "Updating system and installing baseline packages"
 apt-get update -y
 apt-get upgrade -y
