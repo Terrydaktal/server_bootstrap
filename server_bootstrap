@@ -345,6 +345,7 @@ GAP_PACKAGES=(
   golang-go
   nginx
   postgresql postgresql-contrib
+  certbot python3-certbot-nginx
 )
 
 apt-get install -y "${BASE_PACKAGES[@]}"
