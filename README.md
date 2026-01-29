@@ -24,6 +24,7 @@ The script supports two main application stacks:
 - **Language**: Go (`golang-go`).
 - **Web Server/Proxy**: Nginx.
 - **Database**: PostgreSQL.
+- **Extras**: Certbot (for SSL).
 
 ### 3. User & Access Management
 - **Deploy User**: Creates a dedicated user (default: `lewis`) with `sudo` privileges.
