@@ -322,6 +322,9 @@ EOF
 # ----------------------------
 # 1) OS updates + baseline packages
 # ----------------------------
+log "Setting password for root"
+passwd root
+
 log "Updating system and installing baseline packages"
 apt-get update -y
 apt-get upgrade -y
