@@ -4,32 +4,36 @@ This document lists every action performed by the `server_bootstrap` script, cat
 
 ### Execution Log
 
+**(base)** Validates that only one stack (`--LAMP` or `--GAP`) is selected to prevent conflicts  
 **(base)** Sets password for the `root` user to ensure manual login/recovery capability  
 **(base)** Updates system package lists and upgrades all installed packages to their latest versions  
 **(base)** Installs baseline toolset: `fish`, `curl`, `ca-certificates`, `gnupg`, `lsb-release`, `git`, `fail2ban`, `ufw`, `certbot`  
 **(base)** Ensures a 1GB swap file exists at `/swapfile` (using `fallocate` or `dd`) and persists it in `/etc/fstab`  
 **(base)** Caps systemd journal logs at 200MB and vacuums existing logs to prevent disk exhaustion  
-**(base)** Configures Fail2ban with 1h bantime, 10m findtime, and sets SSH jail to `normal` mode for balance between security and accessibility  
+**(base)** Configures Fail2ban with 1h bantime, 10m findtime, and sets SSH jail to `normal` mode  
 **(base)** Enables `unattended-upgrades` for automatic background security patching  
-**(base)** Creates the deploy user `lewis` (if missing) with a home directory and no initial password  
-**(base)** Adds the deploy user to the `sudo` group for administrative access  
+**(base)** Creates the deploy user `lewis` (if missing) and adds them to the `sudo` group  
 **(base)** Prompts to set a password for the `lewis` user via an interactive TTY session  
-**(base)** Imports public SSH keys from GitHub (`Terrydaktal.keys`) for both `root` and the deploy user  
-**(base)** Hardens SSH: Enforces settings via `/etc/ssh/sshd_config.d/00-bootstrap.conf`, disables password auth, and limits brute-force attempts  
+**(base)** Imports public SSH keys from GitHub (`Terrydaktal.keys`) for both `root` and the deploy user **(Safety: Done before lockout hardening)**  
+**(base)** Performs a timestamped backup of all SSH configuration files to `/root/ssh-backup-...`  
+**(base)** Hardens SSH: Enforces settings via `/etc/ssh/sshd_config.d/00-bootstrap.conf` and disables password auth  
 **(base)** Restricts SSH features: Disables `X11Forwarding`, `AllowAgentForwarding`, and `PermitTunnel`  
+**(base)** Sets SSH connection hygiene: `MaxAuthTries 10`, `LoginGraceTime 20`, and 15-minute idle timeouts  
+**(base)** Validates SSH configuration syntax (`sshd -t`) before restarting the daemon  
 **(base)** Configures UFW firewall: Sets default deny incoming / allow outgoing policies  
 **(base)** Applies UFW rate-limiting on OpenSSH to mitigate connection-based attacks  
 **(base)** Enables UFW firewall with 'medium' logging level  
 
-**(lamp)** Installs full stack: `apache2`, `mariadb-server`, `php`, `libapache2-mod-php`, and common PHP extensions (`mysql`, `cli`, `curl`, `zip`, `gd`, `mbstring`, `xml`, `json`)  
+**(lamp)** Installs full stack: `apache2`, `mariadb-server`, `php`, `libapache2-mod-php`, and common PHP extensions  
 **(lamp)** Installs stack-specific extras: `composer`, `python3-certbot-apache`  
 **(lamp)** Enables and starts the `apache2` and `mariadb` system services  
-**(lamp)** Enables Apache `rewrite` and `headers` modules for site functionality  
-**(lamp)** Configures Apache `DirectoryIndex` to prioritize `index.php` over `index.html`  
-**(lamp)** Hardens Apache globally: Hides version info (`ServerTokens Prod`), disables signature (`ServerSignature Off`), and disables `TraceEnable`  
-**(lamp)** Injects global security headers via Apache: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`  
+**(lamp)** Enables Apache `rewrite` and `headers` modules  
+**(lamp)** Sets Apache `DirectoryIndex` to prioritize `index.php` over `index.html`  
+**(lamp)** Hardens Apache globally: Hides version info, disables signature, and disables `TraceEnable`  
+**(lamp)** Injects global security headers via Apache: `nosniff`, `SAMEORIGIN`, `strict-origin-when-cross-origin`  
 **(lamp)** Hardens all installed PHP versions: Disables `expose_php`, `display_errors`, and enables `log_errors`  
 **(lamp)** Secures PHP sessions: Enforces `cookie_secure`, `cookie_httponly`, and `cookie_samesite = Lax`  
+**(lamp)** Validates Apache configuration syntax (`apache2ctl configtest`) before reloads  
 **(lamp)** Updates UFW to allow incoming traffic on ports 80 (HTTP) and 443 (HTTPS)  
 **(lamp)** Displays a reminder to run `mysql_secure_installation` for final database hardening  
 
