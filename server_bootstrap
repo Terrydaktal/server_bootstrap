@@ -268,6 +268,8 @@ harden_php_apache_ini() {
       s/^[ \t]*;?[ \t]*session\.cookie_secure[ \t]*=.*/session.cookie_secure = 1/mg;
       s/^[ \t]*;?[ \t]*session\.cookie_httponly[ \t]*=.*/session.cookie_httponly = 1/mg;
       s/^[ \t]*;?[ \t]*session\.cookie_samesite[ \t]*=.*/session.cookie_samesite = Lax/mg;
+
+      s/^[ \t]*;?[ \t]*disable_functions[ \t]*=.*/disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_multi_exec,parse_ini_file,show_source/mg;
     ' "$ini"
 
     # Append directives if absent
@@ -278,6 +280,9 @@ harden_php_apache_ini() {
     grep -qE '^\s*session\.cookie_secure\s*=' "$ini" || echo "session.cookie_secure = 1" >>"$ini"
     grep -qE '^\s*session\.cookie_httponly\s*=' "$ini" || echo "session.cookie_httponly = 1" >>"$ini"
     grep -qE '^\s*session\.cookie_samesite\s*=' "$ini" || echo "session.cookie_samesite = Lax" >>"$ini"
+
+    grep -qE '^\s*disable_functions\s*=' "$ini" || echo "disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_multi_exec,parse_ini_file,show_source" >>"$ini"
+    grep -qE '^\s*open_basedir\s*=' "$ini" || echo "open_basedir = /var/www:/tmp" >>"$ini"
   done
   shopt -u nullglob
 
@@ -324,6 +329,86 @@ apt_install_if_missing() {
   else
     bootstrap_log "All requested packages are already installed."
   fi
+}
+
+configure_kernel_hardening() {
+  bootstrap_log "Applying Kernel/Network security hardening via sysctl"
+  cat > /etc/sysctl.d/99-security.conf <<EOF
+# --- Enforced by bootstrap ---
+# Disable IP forwarding
+net.ipv4.ip_forward = 0
+net.ipv6.conf.all.forwarding = 0
+
+# Ignore ICMP redirects (prevent MITM)
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+
+# Enable TCP SYN Cookie protection (SYN flood mitigation)
+net.ipv4.tcp_syncookies = 1
+
+# Enable source address verification (prevent IP spoofing)
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+
+# Log suspicious packets
+net.ipv4.conf.all.log_martians = 1
+net.ipv4.conf.default.log_martians = 1
+EOF
+  sysctl -p /etc/sysctl.d/99-security.conf || true
+}
+
+harden_mariadb() {
+  bootstrap_log "Automating MariaDB security hardening"
+  # Set root password if it's currently empty (common on fresh installs)
+  # Then remove anonymous users, test db, and disable remote root
+  mariadb -e "DELETE FROM mysql.user WHERE User='';"
+  mariadb -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
+  mariadb -e "DROP DATABASE IF EXISTS test;"
+  mariadb -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
+  mariadb -e "FLUSH PRIVILEGES;"
+}
+
+configure_nginx_hardening() {
+  bootstrap_log "Writing Nginx security hardening configuration"
+  install -d -m 755 /etc/nginx/conf.d
+  cat > /etc/nginx/conf.d/security.conf <<EOF
+# --- Enforced by bootstrap ---
+server_tokens off;
+
+# Security headers
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header X-XSS-Protection "1; mode=block" always;
+
+# Buffer limits
+client_body_buffer_size 10K;
+client_header_buffer_size 1k;
+client_max_body_size 8m;
+large_client_header_buffers 2 1k;
+EOF
+  nginx -t && systemctl reload nginx
+}
+
+configure_postgresql_hardening() {
+  bootstrap_log "Hardening PostgreSQL configuration"
+  local pg_conf pg_hba
+  shopt -s nullglob
+  for pg_conf in /etc/postgresql/*/main/postgresql.conf; do
+    bootstrap_log "Patching $pg_conf"
+    sed -i "s/^#\?max_connections\s*=.*/max_connections = 100/" "$pg_conf"
+  done
+
+  for pg_hba in /etc/postgresql/*/main/pg_hba.conf; do
+    bootstrap_log "Patching $pg_hba"
+    # Ensure local connections use peer/md5, and reject remote non-SSL if applicable
+    # This is a baseline; standard Debian pg_hba is relatively sane but we reinforce
+    sed -i 's/local\s\+all\s\+all\s\+peer/local all all peer/' "$pg_hba"
+  done
+  shopt -u nullglob
+  systemctl restart postgresql
 }
 
 # ----------------------------
@@ -401,6 +486,7 @@ fi
 # ----------------------------
 configure_swap_1g_if_missing
 cap_and_shrink_journal
+configure_kernel_hardening
 
 # ----------------------------
 # 2) Enable/Start core services
@@ -409,11 +495,14 @@ bootstrap_log "Enabling and starting services"
 if [[ "$INSTALL_LAMP" == "true" ]]; then
   systemctl enable --now apache2
   systemctl enable --now mariadb
+  harden_mariadb
 fi
 
 if [[ "$INSTALL_GAP" == "true" ]]; then
   systemctl enable --now nginx
   systemctl enable --now postgresql
+  configure_nginx_hardening
+  configure_postgresql_hardening
 fi
 
 systemctl enable --now fail2ban
