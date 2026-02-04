@@ -332,8 +332,10 @@ EOF
 # ----------------------------
 # 1) OS updates + baseline packages
 # ----------------------------
-log "Setting password for root"
-passwd root
+echo "*************************************************"
+echo " ACTION REQUIRED: Set ROOT password"
+echo "*************************************************"
+passwd root < /dev/tty
 
 log "Updating system and installing baseline packages"
 apt-get update -y
@@ -466,8 +468,10 @@ else
   usermod -aG sudo "$DEPLOY_USER"
 fi
 
-log "Setting password for $DEPLOY_USER"
-passwd "$DEPLOY_USER"
+echo "*************************************************"
+log " ACTION REQUIRED: Set password for $DEPLOY_USER"
+echo "*************************************************"
+passwd "$DEPLOY_USER" < /dev/tty
 
 # ----------------------------
 # 6) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
