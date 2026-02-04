@@ -143,8 +143,8 @@ UsePAM yes
 # Brute-force / connection hygiene
 MaxAuthTries 10
 LoginGraceTime 20
-ClientAliveInterval 300
-ClientAliveCountMax 3
+ClientAliveInterval 3600
+ClientAliveCountMax 10
 
 # Disable features rarely needed on a web server
 X11Forwarding no

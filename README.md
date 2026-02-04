@@ -19,7 +19,7 @@ This document lists every action performed by the `server_bootstrap` script, cat
 **(base)** Performs a timestamped backup of all SSH configuration files to `/root/ssh-backup-...`  
 **(base)** Hardens SSH: Enforces settings via `/etc/ssh/sshd_config.d/00-bootstrap.conf` and disables password auth  
 **(base)** Restricts SSH features: Disables `X11Forwarding`, `AllowAgentForwarding`, and `PermitTunnel`  
-**(base)** Sets SSH connection hygiene: `MaxAuthTries 10`, `LoginGraceTime 20`, and 15-minute idle timeouts  
+**(base)** Sets SSH connection hygiene: `MaxAuthTries 10`, `LoginGraceTime 20`, and 10-hour idle timeouts  
 **(base)** Validates SSH configuration syntax (`sshd -t`) before restarting the daemon  
 **(base)** Configures UFW firewall: Sets default deny incoming / allow outgoing policies  
 **(base)** Applies UFW rate-limiting on OpenSSH to mitigate connection-based attacks  
