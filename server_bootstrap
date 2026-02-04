@@ -13,48 +13,21 @@ JOURNAL_CAP="200M"
 # ----------------------------
 # Helpers
 # ----------------------------
-log(){ echo "[$(date -Is)] $*"; }
-
-# ----------------------------
-# Parse Args
-# ----------------------------
-INSTALL_LAMP=false
-INSTALL_GAP=false
-for arg in "$@"; do
-  if [[ "$arg" == "--LAMP" ]]; then
-    INSTALL_LAMP=true
-  elif [[ "$arg" == "--GAP" ]]; then
-    INSTALL_GAP=true
-  fi
-done
-
-if [[ "$INSTALL_LAMP" == "true" && "$INSTALL_GAP" == "true" ]]; then
-  log "ERROR: Cannot install both --LAMP and --GAP stacks at once."
-  exit 1
-fi
-
-log "Detected Flags: INSTALL_LAMP=$INSTALL_LAMP, INSTALL_GAP=$INSTALL_GAP"
-if [[ "$INSTALL_LAMP" == "false" && "$INSTALL_GAP" == "false" ]]; then
-  log "No stack selected. Proceeding with BASELINE ONLY."
-fi
-
-# ----------------------------
-# Helpers
-# ----------------------------
+bootstrap_log(){ echo "[$(date -Is)] $*"; }
 
 install_github_keys_for_user() {
   local user="$1" home
   home="$(getent passwd "$user" | cut -d: -f6)"
 
   if [[ -z "$home" || ! -d "$home" ]]; then
-    log "ERROR: Cannot determine home directory for user: $user"
+    bootstrap_log "ERROR: Cannot determine home directory for user: $user"
     exit 1
   fi
 
   install -d -m 700 -o "$user" -g "$user" "$home/.ssh"
-  touch "$home/.ssh/authorized_keys"
-  chown "$user:$user" "$home/.ssh/authorized_keys"
-  chmod 600 "$home/.ssh/authorized_keys"
+touch "$home/.ssh/authorized_keys"
+chown "$user:$user" "$home/.ssh/authorized_keys"
+chmod 600 "$home/.ssh/authorized_keys"
 
   # Append keys if missing (idempotent)
   curl -fsSL "$GH_KEYS_URL" | while IFS= read -r k; do
@@ -64,23 +37,23 @@ install_github_keys_for_user() {
 }
 
 configure_swap_1g_if_missing() {
-  log "Ensuring 1GB swap exists (idempotent)"
+  bootstrap_log "Ensuring 1GB swap exists (idempotent)"
 
   # If any swap is active, do nothing.
   if swapon --show --noheadings 2>/dev/null | grep -q .; then
-    log "Swap already active:"
+    bootstrap_log "Swap already active:"
     swapon --show
     return 0
   fi
 
   # If swapfile exists but isn't active, try enabling it.
   if [[ -f "$SWAPFILE_PATH" ]]; then
-    log "Swapfile exists at $SWAPFILE_PATH but is not active; attempting to enable"
+    bootstrap_log "Swapfile exists at $SWAPFILE_PATH but is not active; attempting to enable"
     chmod 600 "$SWAPFILE_PATH" || true
     mkswap "$SWAPFILE_PATH" >/dev/null 2>&1 || true
     swapon "$SWAPFILE_PATH"
   else
-    log "No active swap found; creating $SWAP_SIZE swapfile at $SWAPFILE_PATH"
+    bootstrap_log "No active swap found; creating $SWAP_SIZE swapfile at $SWAPFILE_PATH"
 
     # Create file (prefer fallocate; fallback to dd)
     if command -v fallocate >/dev/null 2>&1; then
@@ -91,23 +64,23 @@ configure_swap_1g_if_missing() {
     fi
 
     chmod 600 "$SWAPFILE_PATH"
-    mkswap "$SWAPFILE_PATH"
-    swapon "$SWAPFILE_PATH"
+mkswap "$SWAPFILE_PATH"
+swapon "$SWAPFILE_PATH"
   fi
 
   # Persist in fstab (idempotent)
-  if ! grep -qE "^[[:space:]]*${SWAPFILE_PATH//\//\\/}[[:space:]]+none[[:space:]]+swap[[:space:]]" /etc/fstab; then
-    log "Adding swapfile to /etc/fstab"
+  if ! grep -qE "^[[:space:]]*${SWAPFILE_PATH//\/\\/}[[:space:]]+none[[:space:]]+swap[[:space:]]" /etc/fstab; then
+    bootstrap_log "Adding swapfile to /etc/fstab"
     echo "$SWAPFILE_PATH none swap sw 0 0" >> /etc/fstab
   fi
 
-  log "Swap status:"
+  bootstrap_log "Swap status:"
   swapon --show
   free -h
 }
 
 cap_and_shrink_journal() {
-  log "Capping and shrinking systemd journal to $JOURNAL_CAP"
+  bootstrap_log "Capping and shrinking systemd journal to $JOURNAL_CAP"
 
   install -d -m 755 /etc/systemd/journald.conf.d
 
@@ -121,12 +94,12 @@ EOF
   # Shrink existing logs down to cap (idempotent)
   journalctl --vacuum-size="$JOURNAL_CAP" >/dev/null 2>&1 || true
 
-  log "Journal disk usage:"
+  bootstrap_log "Journal disk usage:"
   journalctl --disk-usage || true
 }
 
 harden_sshd() {
-  log "Hardening SSH: enforce settings via /etc/ssh/sshd_config.d/00-bootstrap.conf (first-match-wins safe)"
+  bootstrap_log "Hardening SSH: enforce settings via /etc/ssh/sshd_config.d/00-bootstrap.conf (first-match-wins safe)"
 
   # Backup once per run
   local ts="/root/ssh-backup-$(date +%Y%m%d_%H%M%S)"
@@ -144,7 +117,7 @@ harden_sshd() {
 
   # Remove any existing Include lines; we will re-add at very top
   perl -0777 -i -pe '
-    s/^[ \t]*Include[ \t]+\/etc\/ssh\/sshd_config\.d\/\*\.conf[ \t]*\R//gmi
+    s/^[ \t]*Include[ \t]+\/etc\/ssh\/sshd_config\.d\/\*\.conf[ \t]*\\R//gmi
   ' /etc/ssh/sshd_config
 
   # Insert Include at the very top
@@ -152,7 +125,7 @@ harden_sshd() {
 
   # Remove occurrences of directives we manage to avoid first-match lock-in
   perl -0777 -i -pe '
-    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM|MaxAuthTries|LoginGraceTime|ClientAliveInterval|ClientAliveCountMax|X11Forwarding|AllowAgentForwarding|PermitTunnel)[ \t]+.*\R//gmi
+    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM|MaxAuthTries|LoginGraceTime|ClientAliveInterval|ClientAliveCountMax|X11Forwarding|AllowAgentForwarding|PermitTunnel)[ \t]+.*\\R//gmi
   ' /etc/ssh/sshd_config
 
   # Enforced settings in 00-bootstrap.conf (loads before 50-cloud-init.conf)
@@ -190,7 +163,7 @@ EOF
 }
 
 configure_ufw() {
-  log "Configuring UFW firewall (idempotent)"
+  bootstrap_log "Configuring UFW firewall (idempotent)"
 
   # Only reset if we are starting fresh or strictly enforcing (optional).
   # For "run at any stage", we avoid 'ufw force reset' to preserve custom rules
@@ -202,21 +175,21 @@ configure_ufw() {
 
   # Rate-limit SSH
   if ! ufw status | grep -q "OpenSSH.*LIMIT"; then
-      log "Applying UFW limit on OpenSSH"
+      bootstrap_log "Applying UFW limit on OpenSSH"
       ufw limit OpenSSH
   else
-      log "UFW OpenSSH limit already set"
+      bootstrap_log "UFW OpenSSH limit already set"
   fi
 
   # HTTP/HTTPS
   if [[ "$INSTALL_LAMP" == "true" || "$INSTALL_GAP" == "true" ]]; then
     if ! ufw status | grep -q "80/tcp.*ALLOW"; then
-        log "Allowing port 80/tcp"
+        bootstrap_log "Allowing port 80/tcp"
         ufw allow 80/tcp
     fi
     
     if ! ufw status | grep -q "443/tcp.*ALLOW"; then
-        log "Allowing port 443/tcp"
+        bootstrap_log "Allowing port 443/tcp"
         ufw allow 443/tcp
     fi
   fi
@@ -227,10 +200,10 @@ configure_ufw() {
 
   # Enable if not enabled
   if ! ufw status | grep -q "Status: active"; then
-      log "Enabling UFW"
+      bootstrap_log "Enabling UFW"
       ufw --force enable
   else
-      log "UFW is already active"
+      bootstrap_log "UFW is already active"
   fi
   
   ufw status verbose
@@ -238,7 +211,7 @@ configure_ufw() {
 
 configure_fail2ban_overrides() {
   # Overrides Debian's defaults-debian.conf without editing it
-  log "Configuring Fail2ban overrides (force UFW banaction, keep systemd backend)"
+  bootstrap_log "Configuring Fail2ban overrides (force UFW banaction, keep systemd backend)"
 
   install -d -m 755 /etc/fail2ban/jail.d
 
@@ -269,7 +242,7 @@ EOF
 }
 
 enable_unattended_upgrades() {
-  log "Installing and enabling unattended-upgrades"
+  bootstrap_log "Installing and enabling unattended-upgrades"
   apt-get install -y unattended-upgrades
 
   # Can be interactive depending on image; keep script resilient
@@ -279,12 +252,12 @@ enable_unattended_upgrades() {
 }
 
 harden_php_apache_ini() {
-  log "Hardening PHP settings in /etc/php/*/apache2/php.ini"
+  bootstrap_log "Hardening PHP settings in /etc/php/*/apache2/php.ini"
 
   local ini
   shopt -s nullglob
   for ini in /etc/php/*/apache2/php.ini; do
-    log "Patching $ini"
+    bootstrap_log "Patching $ini"
 
     perl -0777 -i -pe '
       s/^[ \t]*;?[ \t]*expose_php[ \t]*=.*/expose_php = Off/mg;
@@ -311,7 +284,7 @@ harden_php_apache_ini() {
 }
 
 configure_apache_security_hardening_conf() {
-  log "Writing Apache security hardening conf"
+  bootstrap_log "Writing Apache security hardening conf"
 
   cat >/etc/apache2/conf-available/security-hardening.conf <<'EOF'
 # --- Enforced by bootstrap ---
@@ -333,6 +306,48 @@ EOF
   systemctl reload apache2
 }
 
+apt_install_if_missing() {
+  local pkgs=($@)
+  local to_install=()
+  for pkg in "${pkgs[@]}"; do
+    if dpkg -l "$pkg" >/dev/null 2>&1; then
+      bootstrap_log "Package '$pkg' is already installed, skipping."
+    else
+      to_install+=("$pkg")
+    fi
+  done
+
+  if [[ ${#to_install[@]} -gt 0 ]]; then
+    bootstrap_log "Installing missing packages: ${to_install[*]}"
+    apt-get install -y "${to_install[@]}"
+  else
+    bootstrap_log "All requested packages are already installed."
+  fi
+}
+
+# ----------------------------
+# Parse Args
+# ----------------------------
+INSTALL_LAMP=false
+INSTALL_GAP=false
+for arg in "$@"; do
+  if [[ "$arg" == "--LAMP" ]]; then
+    INSTALL_LAMP=true
+  elif [[ "$arg" == "--GAP" ]]; then
+    INSTALL_GAP=true
+  fi
+done
+
+if [[ "$INSTALL_LAMP" == "true" && "$INSTALL_GAP" == "true" ]]; then
+  bootstrap_log "ERROR: Cannot install both --LAMP and --GAP stacks at once."
+  exit 1
+fi
+
+bootstrap_log "Detected Flags: INSTALL_LAMP=$INSTALL_LAMP, INSTALL_GAP=$INSTALL_GAP"
+if [[ "$INSTALL_LAMP" == "false" && "$INSTALL_GAP" == "false" ]]; then
+  bootstrap_log "No stack selected. Proceeding with BASELINE ONLY."
+fi
+
 # ----------------------------
 # 1) OS updates + baseline packages
 # ----------------------------
@@ -341,7 +356,7 @@ echo " ACTION REQUIRED: Set ROOT password"
 echo "*************************************************"
 passwd root < /dev/tty
 
-log "Updating system and installing baseline packages"
+bootstrap_log "Updating system and installing baseline packages"
 apt-get update -y
 apt-get upgrade -y
 
@@ -368,34 +383,15 @@ GAP_PACKAGES=(
   python3-certbot-nginx
 )
 
-apt_install_if_missing() {
-  local pkgs=("$@")
-  local to_install=()
-  for pkg in "${pkgs[@]}"; do
-    if dpkg -l "$pkg" >/dev/null 2>&1; then
-      log "Package '$pkg' is already installed, skipping."
-    else
-      to_install+=("$pkg")
-    fi
-  done
-
-  if [[ ${#to_install[@]} -gt 0 ]]; then
-    log "Installing missing packages: ${to_install[*]}"
-    apt-get install -y "${to_install[@]}"
-  else
-    log "All requested packages are already installed."
-  fi
-}
-
 apt_install_if_missing "${BASE_PACKAGES[@]}"
 
 if [[ "$INSTALL_LAMP" == "true" ]]; then
-  log "Checking LAMP stack packages"
+  bootstrap_log "Checking LAMP stack packages"
   apt_install_if_missing "${LAMP_PACKAGES[@]}"
 fi
 
 if [[ "$INSTALL_GAP" == "true" ]]; then
-  log "Checking GAP stack packages"
+  bootstrap_log "Checking GAP stack packages"
   apt_install_if_missing "${GAP_PACKAGES[@]}"
 fi
 
@@ -408,7 +404,7 @@ cap_and_shrink_journal
 # ----------------------------
 # 2) Enable/Start core services
 # ----------------------------
-log "Enabling and starting services"
+bootstrap_log "Enabling and starting services"
 if [[ "$INSTALL_LAMP" == "true" ]]; then
   systemctl enable --now apache2
   systemctl enable --now mariadb
@@ -435,7 +431,7 @@ if [[ "$INSTALL_LAMP" == "true" ]]; then
   # ----------------------------
   # 3) Apache global tuning + hardening (non-site-specific)
   # ----------------------------
-  log "Configuring Apache global modules/settings"
+  bootstrap_log "Configuring Apache global modules/settings"
   a2enmod rewrite headers >/dev/null || true
 
   # Ensure DirectoryIndex prefers index.php
@@ -457,53 +453,53 @@ fi
 # ----------------------------
 # 5) Create deploy user (idempotent)
 # ----------------------------
-log "Ensuring deploy user exists: $DEPLOY_USER"
+bootstrap_log "Ensuring deploy user exists: $DEPLOY_USER"
 if id "$DEPLOY_USER" >/dev/null 2>&1; then
-  log "User '$DEPLOY_USER' already exists, skipping creation."
+  bootstrap_log "User '$DEPLOY_USER' already exists, skipping creation."
 else
-  log "Creating user '$DEPLOY_USER'..."
+  bootstrap_log "Creating user '$DEPLOY_USER'வைக்..."
   adduser --disabled-password --gecos "" "$DEPLOY_USER"
 fi
 
 if groups "$DEPLOY_USER" | grep -q "\bsudo\b"; then
-  log "User '$DEPLOY_USER' is already in sudo group, skipping."
+  bootstrap_log "User '$DEPLOY_USER' is already in sudo group, skipping."
 else
-  log "Adding user '$DEPLOY_USER' to sudo group..."
+  bootstrap_log "Adding user '$DEPLOY_USER' to sudo group..."
   usermod -aG sudo "$DEPLOY_USER"
 fi
 
 echo "*************************************************"
-log " ACTION REQUIRED: Set password for $DEPLOY_USER"
+bootstrap_log " ACTION REQUIRED: Set password for $DEPLOY_USER"
 echo "*************************************************"
 passwd "$DEPLOY_USER" < /dev/tty
 
 # ----------------------------
 # 6) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
 # ----------------------------
-log "Installing GitHub SSH keys for root and $DEPLOY_USER from $GH_KEYS_URL"
+bootstrap_log "Installing GitHub SSH keys for root and $DEPLOY_USER from $GH_KEYS_URL"
 install_github_keys_for_user root
 install_github_keys_for_user "$DEPLOY_USER"
-log "OK: keys installed for root + $DEPLOY_USER"
+bootstrap_log "OK: keys installed for root + $DEPLOY_USER"
 
 # ----------------------------
 # 7) Harden SSH (enforced via 00-bootstrap.conf)
 # ----------------------------
-log "Hardening SSH daemon (enforced via 00-bootstrap.conf; fixing sshd_config interference)"
+bootstrap_log "Hardening SSH daemon (enforced via 00-bootstrap.conf; fixing sshd_config interference)"
 harden_sshd
-log "OK: ssh hardened"
+bootstrap_log "OK: ssh hardened"
 
 # ----------------------------
 # 8) Firewall baseline (do this after SSH is validated)
 # ----------------------------
-log "Configuring UFW firewall"
+bootstrap_log "Configuring UFW firewall"
 configure_ufw
-log "OK: UFW configured"
+bootstrap_log "OK: UFW configured"
 
 # ----------------------------
 # 9) Optional: MariaDB hardening reminder
 # ----------------------------
 if [[ "$INSTALL_LAMP" == "true" ]]; then
-  log "NOTE: run mysql_secure_installation manually if you want interactive hardening"
+  bootstrap_log "NOTE: run mysql_secure_installation manually if you want interactive hardening"
 fi
 
-log "DONE"
+bootstrap_log "DONE"
