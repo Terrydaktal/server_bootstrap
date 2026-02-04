@@ -23,6 +23,11 @@ for arg in "$@"; do
   fi
 done
 
+if [[ "$INSTALL_LAMP" == "true" && "$INSTALL_GAP" == "true" ]]; then
+  log "ERROR: Cannot install both --LAMP and --GAP stacks at once."
+  exit 1
+fi
+
 log "Detected Flags: INSTALL_LAMP=$INSTALL_LAMP, INSTALL_GAP=$INSTALL_GAP"
 if [[ "$INSTALL_LAMP" == "false" && "$INSTALL_GAP" == "false" ]]; then
   log "No stack selected. Proceeding with BASELINE ONLY."
