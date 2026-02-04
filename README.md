@@ -8,25 +8,27 @@ This is an opinionated, idempotent Bash script designed to bootstrap a fresh Deb
 - **OS Updates**: Runs `apt-get update` and `upgrade`.
 - **Swap Management**: Checks for and creates a **1GB swap file** (`/swapfile`) if no active swap is found. Persists it in `/etc/fstab`.
 - **Journald Hygiene**: Caps systemd journal logs at **200MB** and enables vacuuming to prevent disk exhaustion.
-- **Base Packages**: Installs essential tools (`curl`, `git`, `fish`, `ufw`, `fail2ban`).
+- **Base Packages**: Installs essential tools (`curl`, `git`, `fish`, `ufw`, `fail2ban`, `certbot`).
+- **Enhanced Logging**: Every step is logged, and existing packages/configurations are skipped automatically (idempotency).
 
 ### 2. Stack Options
 
-The script supports two main application stacks:
+The script supports two mutually exclusive application stacks. You can only install one at a time.
 
 #### LAMP Stack (`--LAMP`)
 - **Web Server**: Apache2 with hardening (`ServerTokens Prod`, `ServerSignature Off`).
 - **PHP**: Hardened `php.ini` (`expose_php = Off`, secure session cookies).
 - **Database**: MariaDB.
-- **Extras**: Composer, Certbot (for SSL).
+- **Extras**: Composer, `python3-certbot-apache`.
 
 #### GAP Stack (`--GAP`)
 - **Language**: Go (`golang-go`).
 - **Web Server/Proxy**: Nginx.
 - **Database**: PostgreSQL.
-- **Extras**: Certbot (for SSL).
+- **Extras**: `python3-certbot-nginx`.
 
 ### 3. User & Access Management
+- **Password Prompts**: The script will prompt you to set passwords for both the `root` user and the deploy user during execution.
 - **Deploy User**: Creates a dedicated user (default: `lewis`) with `sudo` privileges.
 - **SSH Keys**: Automatically fetches and installs public SSH keys from a GitHub keys URL for both `root` and the deploy user.
 
@@ -47,7 +49,7 @@ Configures `sshd` using a "first-match-wins" strategy via a dedicated drop-in fi
 #### Fail2ban
 - **Backend**: Configured to use `systemd`.
 - **Banaction**: Uses `ufw` to block IPs.
-- **Jails**: Enables `sshd` jail in `aggressive` mode.
+- **Jails**: Enables `sshd` jail in `normal` mode with a **1 hour** ban time.
 
 #### Unattended Upgrades
 - Installs and enables `unattended-upgrades` for automatic security patching.
