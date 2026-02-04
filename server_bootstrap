@@ -11,6 +11,11 @@ SWAP_SIZE="1G"
 JOURNAL_CAP="200M"
 
 # ----------------------------
+# Helpers
+# ----------------------------
+log(){ echo "[$(date -Is)] $*"; }
+
+# ----------------------------
 # Parse Args
 # ----------------------------
 INSTALL_LAMP=false
@@ -36,7 +41,6 @@ fi
 # ----------------------------
 # Helpers
 # ----------------------------
-log(){ echo "[$(date -Is)] $*"; }
 
 install_github_keys_for_user() {
   local user="$1" home
