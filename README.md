@@ -7,7 +7,7 @@ This document lists every action performed by the `server_bootstrap` script, cat
 **(base)** Validates that only one stack (`--LAMP` or `--GAP`) is selected to prevent conflicts  
 **(base)** Sets password for the `root` user to ensure manual login/recovery capability  
 **(base)** Updates system package lists and upgrades all installed packages to their latest versions  
-**(base)** Installs baseline toolset: `fish`, `curl`, `ca-certificates`, `gnupg`, `lsb-release`, `git`, `fail2ban`, `ufw`, `certbot`  
+**(base)** Installs baseline toolset: `fish`, `curl`, `ca-certificates`, `gnupg`, `lsb-release`, `git`, `fail2ban`, `ufw`, `certbot`, `rsync`  
 **(base)** Ensures a 1GB swap file exists at `/swapfile` (using `fallocate` or `dd`) and persists it in `/etc/fstab`  
 **(base)** Caps systemd journal logs at 200MB and vacuums existing logs to prevent disk exhaustion  
 **(base)** Applies Kernel/Network security hardening via `sysctl`: Disables IP forwarding, ignores ICMP redirects, enables SYN cookie protection, and enables RP filtering (spoofing protection)  

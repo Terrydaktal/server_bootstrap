@@ -452,6 +452,7 @@ BASE_PACKAGES=(
   fail2ban
   ufw
   certbot
+  rsync
 )
 
 LAMP_PACKAGES=(
