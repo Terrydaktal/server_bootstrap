@@ -37,8 +37,85 @@ chmod 600 "$home/.ssh/authorized_keys"
   done
 }
 
-configure_swap_1g_if_missing() {
-  bootstrap_log "Ensuring 1GB swap exists (idempotent)"
+configure_ssh_prompt() {
+  local user="$1" home
+  home="$(getent passwd "$user" | cut -d: -f6)"
+
+  if [[ -z "$home" || ! -d "$home" ]]; then
+    bootstrap_log "ERROR: Cannot determine home directory for user: $user"
+    return 1
+  fi
+
+  bootstrap_log "Configuring SSH prompt for $user in $home/.bashrc (idempotent)"
+
+  # Ensure file exists
+  touch "$home/.bashrc"
+  chown "$user:$user" "$home/.bashrc"
+
+  if ! grep -q "SSH_PREFIX" "$home/.bashrc"; then
+    cat << 'EOF' >> "$home/.bashrc"
+
+# Programmatic SSH Prompt Logic
+if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+    SSH_PREFIX="\[\033[01;33m\](ssh) \[\033[00m\]"
+else
+    SSH_PREFIX=""
+fi
+export PS1="${SSH_PREFIX}\[\033[01;32m\]\u\[\033[00m\]@\h \[\033[01;34m\]\w\[\033[00m\] > "
+EOF
+fi
+}
+
+configure_fish_prompt() {
+local user="$1" home
+home="$(getent passwd "$user" | cut -d: -f6)"
+
+if [[ -z "$home" || ! -d "$home" ]]; then
+bootstrap_log "ERROR: Cannot determine home directory for user: $user"
+return 1
+fi
+
+bootstrap_log "Configuring Fish prompt for $user in $home/.config/fish/functions/fish_prompt.fish (idempotent)"
+
+local fish_dir="$home/.config/fish/functions"
+install -d -m 755 -o "$user" -g "$user" "$home/.config"
+install -d -m 755 -o "$user" -g "$user" "$home/.config/fish"
+install -d -m 755 -o "$user" -g "$user" "$fish_dir"
+
+cat << 'EOF' > "$fish_dir/fish_prompt.fish"
+function fish_prompt
+# 1. SSH Tag
+if set -q SSH_CLIENT; or set -q SSH_TTY
+    set_color -o yellow
+    echo -n "(ssh) "
+    set_color normal
+end
+
+# 2. "lewis" in green
+set_color green
+echo -n (whoami)
+
+# 3. "@lewis" in white (normal)
+set_color normal
+echo -n "@"(hostname)" "
+
+# 4. Directory and Git
+set_color $fish_color_cwd
+echo -n (prompt_pwd)
+set_color normal
+
+# Add (main) if in a git repo
+if functions -q fish_vcs_prompt
+    fish_vcs_prompt
+end
+
+echo -n "> "
+end
+EOF
+chown "$user:$user" "$fish_dir/fish_prompt.fish"
+}
+
+configure_swap_1g_if_missing() {  bootstrap_log "Ensuring 1GB swap exists (idempotent)"
 
   # If any swap is active, do nothing.
   if swapon --show --noheadings 2>/dev/null | grep -q .; then
@@ -567,10 +644,14 @@ passwd "$DEPLOY_USER" < /dev/tty
 # ----------------------------
 # 6) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
 # ----------------------------
-bootstrap_log "Installing GitHub SSH keys for root and $DEPLOY_USER from $GH_KEYS_URL"
+bootstrap_log "Installing GitHub SSH keys and configuring prompts for root and $DEPLOY_USER from $GH_KEYS_URL"
 install_github_keys_for_user root
 install_github_keys_for_user "$DEPLOY_USER"
-bootstrap_log "OK: keys installed for root + $DEPLOY_USER"
+configure_ssh_prompt root
+configure_ssh_prompt "$DEPLOY_USER"
+configure_fish_prompt root
+configure_fish_prompt "$DEPLOY_USER"
+bootstrap_log "OK: keys installed and prompts configured for root + $DEPLOY_USER"
 
 # ----------------------------
 # 7) Harden SSH (enforced via 00-bootstrap.conf)
