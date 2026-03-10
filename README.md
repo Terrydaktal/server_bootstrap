@@ -16,6 +16,8 @@ This document lists every action performed by the `server_bootstrap` script, cat
 **(base)** Creates the deploy user `lewis` (if missing) and adds them to the `sudo` group  
 **(base)** Prompts to set a password for the `lewis` user via an interactive TTY session  
 **(base)** Imports public SSH keys from GitHub (`Terrydaktal.keys`) for both `root` and the deploy user **(Safety: Done before lockout hardening)**  
+**(base)** Configures programmatic Bash prompt logic in `~/.bashrc`: Adds an `(ssh)` prefix for remote sessions and sets a green/white/blue color scheme  
+**(base)** Configures enhanced Fish prompt in `~/.config/fish/functions/fish_prompt.fish`: Includes an `(ssh)` prefix, git branch integration, and consistent color scheme  
 **(base)** Performs a timestamped backup of all SSH configuration files to `/root/ssh-backup-...`  
 **(base)** Hardens SSH: Enforces settings via `/etc/ssh/sshd_config.d/00-bootstrap.conf` and disables password auth  
 **(base)** Restricts SSH features: Disables `X11Forwarding`, `AllowAgentForwarding`, and `PermitTunnel`  
