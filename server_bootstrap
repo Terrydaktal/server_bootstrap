@@ -395,76 +395,63 @@ configure_apache_catchall_sites() {
   # 1. Prepare isolated directory
   mkdir -p /var/www/default
   
-  # Create the modern landing page
+  # Create the exact landing page provided by the user
   cat << 'EOF' > /var/www/default/index.html
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Server Running</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .card { background: white; padding: 2.5rem; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); max-width: 550px; width: 90%; text-align: center; border: 1px solid #e1e1e7; }
-        h1 { color: #1a1a1a; margin-top: 0; font-weight: 700; }
-        p { color: #666; line-height: 1.6; }
-        .sites-box { text-align: left; background: #fafafa; border-radius: 8px; padding: 1.5rem; margin-top: 1.5rem; border: 1px solid #eee; }
-        h3 { margin-top: 0; color: #444; font-size: 1.1rem; }
-        ul { list-style: none; padding: 0; margin: 0; }
-        li { margin: 0.8rem 0; font-size: 0.95rem; color: #555; }
-        a { color: #0066cc; text-decoration: none; font-weight: 600; }
-        a:hover { text-decoration: underline; }
-        .footer { margin-top: 2rem; font-size: 0.85rem; color: #999; border-top: 1px solid #eee; padding-top: 1.5rem; }
-        .footer b { color: #777; }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Web Server Running</title>
+  <style>
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial,sans-serif; margin: 0; background:#fafafa; color:#111; }
+    .wrap { max-width: 860px; margin: 0 auto; padding: 28px; }
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:18px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+    a { color:#0b5fff; text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .muted { color:#6b7280; }
+    ul { margin: 10px 0 0 20px; }
+  </style>
 </head>
 <body>
+  <div class="wrap">
     <div class="card">
-        <h1>Web Server Running</h1>
-        <p>This server hosts multiple websites. Access them via their domain names.</p>
-        
-        <div class="sites-box">
-            <h3>Available Sites</h3>
-            <ul>
-                <li>&bull; <strong>KnowThatStuff Wiki</strong> (<a href="http://knowthatstuff.com/">http://knowthatstuff.com/</a>) &mdash; knowthatstuff.com</li>
-                <li>&bull; <strong>DictAI</strong> (<a href="http://dictai.org/">http://dictai.org/</a>) &mdash; dictai.org</li>
-            </ul>
-        </div>
+      <div style="font-weight:800; font-size:20px;">Web Server Running</div>
+      <div class="muted" style="margin-top:6px;">
+        This server hosts multiple websites. Access them via their domain names.
+      </div>
 
-        <div class="footer">
-            <p>Accessing via: <b><span id="ip">Loading...</span></b></p>
-            <p>Server Time: <b><span id="time"></span></b></p>
-        </div>
+      <div style="margin-top:14px; font-weight:700;">Available Sites</div>
+      <ul>
+        <li><a href="http://knowthatstuff.com/">KnowThatStuff Wiki</a> — knowthatstuff.com</li>
+        <li><a href="http://dictai.org/">DictAI</a> — dictai.org</li>
+      </ul>
+
+      <div class="muted" style="margin-top:14px;">
+        Accessed via IP: <span id="ip"></span><br/>
+        Server time: <span id="t"></span>
+      </div>
     </div>
-    <script>
-        document.getElementById('ip').textContent = window.location.hostname;
-        function updateTime() {
-            const now = new Date();
-            document.getElementById('time').textContent = now.toUTCString();
-        }
-        updateTime();
-        setInterval(updateTime, 1000);
-    </script>
+  </div>
+  <script>
+    document.getElementById('ip').textContent = location.hostname;
+    document.getElementById('t').textContent = new Date().toLocaleString();
+  </script>
 </body>
 </html>
 EOF
 
-  # Create the .htaccess security block
+  # Create the exact .htaccess provided by the user
   cat << 'EOF' > /var/www/default/.htaccess
-# --- Hard block against automated vulnerability scanners ---
+# Block common exploit attempts
+<Files "*.php">
+    Deny from all
+</Files>
 
-# Deny access to any .php files
-<FilesMatch "\.php$">
-    Require all denied
-</FilesMatch>
-
-# Deny access to sensitive or backup files
-<FilesMatch "\.(env|log|sql|bak|old)$">
-    Require all denied
-</FilesMatch>
-
-# Prevent directory listing
-Options -Indexes
+# Block access to sensitive files
+<Files ~ "\.(env|log|sql|bak|old)$">
+    Deny from all
+</Files>
 EOF
 
   chown -R www-data:www-data /var/www/default
