@@ -418,14 +418,8 @@ configure_apache_catchall_sites() {
     <div class="card">
       <div style="font-weight:800; font-size:20px;">Web Server Running</div>
       <div class="muted" style="margin-top:6px;">
-        This server hosts multiple websites. Access them via their domain names.
+        This server hosts multiple websites. Access them via their respective domain names.
       </div>
-
-      <div style="margin-top:14px; font-weight:700;">Available Sites</div>
-      <ul>
-        <li><a href="http://knowthatstuff.com/">KnowThatStuff Wiki</a> — knowthatstuff.com</li>
-        <li><a href="http://dictai.org/">DictAI</a> — dictai.org</li>
-      </ul>
 
       <div class="muted" style="margin-top:14px;">
         Accessed via IP: <span id="ip"></span><br/>
