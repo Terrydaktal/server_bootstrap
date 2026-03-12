@@ -402,10 +402,11 @@ configure_apache_catchall_sites() {
 # --- Automated Site Discovery for Catch-all Landing Page ---
 
 HTML_FILE="/var/www/default/index.html"
-# Extract unique ServerNames from enabled sites (excluding defaults)
-DOMAINS=$(grep -rhEi "^\s*ServerName" /etc/apache2/sites-enabled/ 2>/dev/null | \
+# Extract unique ServerNames from enabled sites (excluding defaults and IPs)
+# Note: Use -R to follow symlinks in sites-enabled
+DOMAINS=$(grep -RhEi "^\s*ServerName" /etc/apache2/sites-enabled/ 2>/dev/null | \
           awk '{print $2}' | \
-          grep -vEi "localhost|default" | \
+          grep -vEi "localhost|default|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+" | \
           sort -u)
 
 SITES_HTML=""
