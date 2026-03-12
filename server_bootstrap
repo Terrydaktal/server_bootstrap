@@ -390,13 +390,37 @@ EOF
 }
 
 configure_apache_catchall_sites() {
-  bootstrap_log "Configuring Apache 'black hole' catch-all sites (000-default and default-ssl)"
+  bootstrap_log "Configuring Apache 'black hole' catch-all sites and site discovery utility"
 
   # 1. Prepare isolated directory
   mkdir -p /var/www/default
-  
-  # Create the exact landing page provided by the user
-  cat << 'EOF' > /var/www/default/index.html
+  chown -R www-data:www-data /var/www/default
+
+  # 2. Create the site discovery helper script
+  cat << 'EOF' > /usr/local/bin/update-server-landing
+#!/usr/bin/env bash
+# --- Automated Site Discovery for Catch-all Landing Page ---
+
+HTML_FILE="/var/www/default/index.html"
+# Extract unique ServerNames from enabled sites (excluding defaults)
+DOMAINS=$(grep -rhEi "^\s*ServerName" /etc/apache2/sites-enabled/ 2>/dev/null | \
+          awk '{print $2}' | \
+          grep -vEi "localhost|default" | \
+          sort -u)
+
+SITES_HTML=""
+if [[ -n "$DOMAINS" ]]; then
+    SITES_HTML="<div style=\"margin-top:14px; font-weight:700;\">Available Sites</div><ul>"
+    while read -r d; do
+        [[ -z "$d" ]] && continue
+        SITES_HTML+="<li><a href=\"http://$d/\">$d</a></li>"
+    done <<< "$DOMAINS"
+    SITES_HTML+="</ul>"
+else
+    SITES_HTML="<div class=\"muted\" style=\"margin-top:14px;\">No additional sites detected yet. Access them via their respective domain names.</div>"
+fi
+
+cat << HTML_EOF > "$HTML_FILE"
 <!doctype html>
 <html lang="en">
 <head>
@@ -418,8 +442,10 @@ configure_apache_catchall_sites() {
     <div class="card">
       <div style="font-weight:800; font-size:20px;">Web Server Running</div>
       <div class="muted" style="margin-top:6px;">
-        This server hosts multiple websites. Access them via their respective domain names.
+        This server hosts multiple websites.
       </div>
+
+      \$SITES_HTML
 
       <div class="muted" style="margin-top:14px;">
         Accessed via IP: <span id="ip"></span><br/>
@@ -433,9 +459,14 @@ configure_apache_catchall_sites() {
   </script>
 </body>
 </html>
+HTML_EOF
+
+chown www-data:www-data "$HTML_FILE"
 EOF
 
-  # Create the exact .htaccess provided by the user
+  chmod +x /usr/local/bin/update-server-landing
+
+  # 3. Create the exact .htaccess provided by the user
   cat << 'EOF' > /var/www/default/.htaccess
 # Block common exploit attempts
 <Files "*.php">
@@ -448,9 +479,7 @@ EOF
 </Files>
 EOF
 
-  chown -R www-data:www-data /var/www/default
-
-  # 2. Write 000-default.conf (Port 80)
+  # 4. Write 000-default.conf (Port 80)
   cat << 'EOF' > /etc/apache2/sites-available/000-default.conf
 <VirtualHost *:80>
     ServerAdmin webmaster@localhost
@@ -474,7 +503,7 @@ EOF
 </VirtualHost>
 EOF
 
-  # 3. Write default-ssl.conf (Port 443)
+  # 5. Write default-ssl.conf (Port 443)
   cat << 'EOF' > /etc/apache2/sites-available/default-ssl.conf
 <IfModule mod_ssl.c>
     <VirtualHost _default_:443>
@@ -504,10 +533,11 @@ EOF
 </IfModule>
 EOF
 
-  # 4. Enforce state (Enable 000-default, keep default-ssl disabled)
+  # 6. Enforce state and run the discovery script
   a2ensite 000-default >/dev/null || true
-  # Explicitly disable default-ssl as per your preference (keeping it as a dormant template)
   a2dissite default-ssl >/dev/null || true
+  
+  /usr/local/bin/update-server-landing
 
   apache2ctl configtest
   systemctl reload apache2

@@ -39,7 +39,7 @@ This document lists every action performed by the `server_bootstrap` script, cat
 **(lamp)** Deep-hardens PHP: Disables dangerous functions (`exec`, `system`, etc.) and restricts file access via `open_basedir`  
 **(lamp)** Secures PHP sessions: Enforces `cookie_secure`, `cookie_httponly`, and `cookie_samesite = Lax`  
 **(lamp)** Configures Apache 'black hole' catch-all sites: Routes unknown IP/domain traffic to `/var/www/default`  
-**(lamp)** Deploys a generic landing page: Provides a clean card-based UI informing users to access sites via their domain names, with JS-based IP and time display  
+**(lamp)** Deploys site discovery utility: Installs `update-server-landing` to automatically detect and list hosted sites on the landing page  
 **(lamp)** Hardens catch-all sites: Disables PHP execution and deploys `.htaccess` to hard-block `.php`, `.env`, `.log`, `.sql`, `.bak`, and `.old` files  
 **(lamp)** Pre-configures `default-ssl.conf` with secure boilerplate and snakeoil certificate placeholders  
 **(lamp)** Validates Apache configuration syntax (`apache2ctl configtest`) before reloads  
