@@ -38,6 +38,9 @@ This document lists every action performed by the `server_bootstrap` script, cat
 **(lamp)** Hardens all installed PHP versions: Disables `expose_php`, `display_errors`, and enables `log_errors`  
 **(lamp)** Deep-hardens PHP: Disables dangerous functions (`exec`, `system`, etc.) and restricts file access via `open_basedir`  
 **(lamp)** Secures PHP sessions: Enforces `cookie_secure`, `cookie_httponly`, and `cookie_samesite = Lax`  
+**(lamp)** Configures Apache 'black hole' catch-all sites: Routes unknown IP/domain traffic to `/var/www/default`  
+**(lamp)** Hardens catch-all sites: Disables PHP execution (`php_admin_flag engine off`) and uses isolated logging  
+**(lamp)** Pre-configures `default-ssl.conf` with secure boilerplate and snakeoil certificate placeholders  
 **(lamp)** Validates Apache configuration syntax (`apache2ctl configtest`) before reloads  
 **(lamp)** Updates UFW to allow incoming traffic on ports 80 (HTTP) and 443 (HTTPS)  
 

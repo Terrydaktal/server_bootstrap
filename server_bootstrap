@@ -389,6 +389,79 @@ EOF
   systemctl reload apache2
 }
 
+configure_apache_catchall_sites() {
+  bootstrap_log "Configuring Apache 'black hole' catch-all sites (000-default and default-ssl)"
+
+  # 1. Prepare isolated directory
+  mkdir -p /var/www/default
+  if [[ ! -f "/var/www/default/index.html" ]]; then
+    echo "<html><body><h1>403 Forbidden</h1></body></html>" > /var/www/default/index.html
+  fi
+  chown -R www-data:www-data /var/www/default
+
+  # 2. Write 000-default.conf (Port 80)
+  cat << 'EOF' > /etc/apache2/sites-available/000-default.conf
+<VirtualHost *:80>
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/default
+
+    # Catch-all security block for IP/unmatched domains
+    <Directory /var/www/default>
+        Options -Indexes +FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    # Crucial: Disable PHP execution for this VirtualHost
+    <IfModule mod_php.c>
+        php_admin_flag engine off
+    </IfModule>
+
+    # Isolated logging
+    ErrorLog ${APACHE_LOG_DIR}/default_error.log
+    CustomLog ${APACHE_LOG_DIR}/default_access.log combined
+</VirtualHost>
+EOF
+
+  # 3. Write default-ssl.conf (Port 443)
+  cat << 'EOF' > /etc/apache2/sites-available/default-ssl.conf
+<IfModule mod_ssl.c>
+    <VirtualHost _default_:443>
+        ServerAdmin webmaster@localhost
+        DocumentRoot /var/www/default
+
+        <Directory /var/www/default>
+            Options -Indexes +FollowSymLinks
+            AllowOverride None
+            Require all granted
+        </Directory>
+
+        # Crucial: Disable PHP execution for this VirtualHost
+        <IfModule mod_php.c>
+            php_admin_flag engine off
+        </IfModule>
+
+        # Isolated logging
+        ErrorLog ${APACHE_LOG_DIR}/default_ssl_error.log
+        CustomLog ${APACHE_LOG_DIR}/default_ssl_access.log combined
+
+        SSLEngine on
+        # Use snakeoil certs until certbot is run or for generic access
+        SSLCertificateFile    /etc/ssl/certs/ssl-cert-snakeoil.pem
+        SSLCertificateKeyFile /etc/ssl/private/ssl-cert-snakeoil.key
+    </VirtualHost>
+</IfModule>
+EOF
+
+  # 4. Enforce state (Enable 000-default, keep default-ssl disabled)
+  a2ensite 000-default >/dev/null || true
+  # Explicitly disable default-ssl as per your preference (keeping it as a dormant template)
+  a2dissite default-ssl >/dev/null || true
+
+  apache2ctl configtest
+  systemctl reload apache2
+}
+
 apt_install_if_missing() {
   local pkgs=($@)
   local to_install=()
@@ -538,6 +611,7 @@ LAMP_PACKAGES=(
   mariadb-server
   composer
   python3-certbot-apache
+  ssl-cert
 )
 
 GAP_PACKAGES=(
@@ -616,6 +690,11 @@ if [[ "$INSTALL_LAMP" == "true" ]]; then
   # 4) PHP hardening for mod_php (apache2 php.ini)
   # ----------------------------
   harden_php_apache_ini
+
+  # ----------------------------
+  # 4.1) Configure Apache Catch-all/Blackhole sites
+  # ----------------------------
+  configure_apache_catchall_sites
 fi
 
 # ----------------------------
