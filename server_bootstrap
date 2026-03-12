@@ -668,14 +668,10 @@ fi
 # ----------------------------
 # 1) OS updates + baseline packages
 # ----------------------------
-if passwd --status root | grep -q "NP\|L"; then
-  echo "*************************************************"
-  echo " ACTION REQUIRED: Set ROOT password"
-  echo "*************************************************"
-  passwd root < /dev/tty
-else
-  bootstrap_log "Root password already set, skipping."
-fi
+echo "*************************************************"
+echo " ACTION REQUIRED: Set ROOT password"
+echo "*************************************************"
+passwd root < /dev/tty
 
 bootstrap_log "Updating system and installing baseline packages"
 apt-get update -y
@@ -800,14 +796,10 @@ else
   usermod -aG sudo "$DEPLOY_USER"
 fi
 
-if passwd --status "$DEPLOY_USER" | grep -q "NP\|L"; then
-  echo "*************************************************"
-  bootstrap_log " ACTION REQUIRED: Set password for $DEPLOY_USER"
-  echo "*************************************************"
-  passwd "$DEPLOY_USER" < /dev/tty
-else
-  bootstrap_log "Password for $DEPLOY_USER already set, skipping."
-fi
+echo "*************************************************"
+bootstrap_log " ACTION REQUIRED: Set password for $DEPLOY_USER"
+echo "*************************************************"
+passwd "$DEPLOY_USER" < /dev/tty
 
 # ----------------------------
 # 6) Install GitHub SSH keys (BEFORE hardening SSH/UFW)
