@@ -37,6 +37,39 @@ apt_install_if_missing() {
   fi
 }
 
+disable_cdrom_apt_sources() {
+  local file backup
+  local changed=false
+
+  shopt -s nullglob
+  for file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do
+    [[ -f "$file" ]] || continue
+    if grep -qE '^[[:space:]]*deb(-src)?[[:space:]].*cdrom:' "$file"; then
+      backup="${file}.ssh-bootstrap.bak"
+      [[ -e "$backup" ]] || cp -a "$file" "$backup"
+      sed -i -E 's/^([[:space:]]*deb(-src)?[[:space:]].*cdrom:)/# disabled by ssh_bootstrap: \1/' "$file"
+      bootstrap_log "Disabled cdrom APT source in $file"
+      changed=true
+    fi
+  done
+
+  for file in /etc/apt/sources.list.d/*.sources; do
+    [[ -f "$file" ]] || continue
+    if grep -qE '^[[:space:]]*URIs:[[:space:]].*cdrom:' "$file"; then
+      backup="${file}.ssh-bootstrap.bak"
+      [[ -e "$backup" ]] || cp -a "$file" "$backup"
+      mv "$file" "${file}.disabled-by-ssh-bootstrap"
+      bootstrap_log "Disabled cdrom APT source file $file"
+      changed=true
+    fi
+  done
+  shopt -u nullglob
+
+  if [[ "$changed" == "false" ]]; then
+    bootstrap_log "No active cdrom APT sources found"
+  fi
+}
+
 install_github_keys_for_user() {
   local user="$1" home
   home="$(getent passwd "$user" | cut -d: -f6)"
@@ -162,6 +195,8 @@ detect_internal_ip() {
 
 main() {
   require_root
+
+  disable_cdrom_apt_sources
 
   bootstrap_log "Updating package lists"
   apt-get update -y
