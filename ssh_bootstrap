@@ -67,6 +67,7 @@ EOF
   fi
 
   ssh-keygen -A
+  install -d -m 755 -o root -g root /run/sshd
 }
 
 disable_cdrom_apt_sources() {
