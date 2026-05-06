@@ -19,10 +19,11 @@ require_root() {
 apt_install_if_missing() {
   local pkgs=("$@")
   local to_install=()
-  local pkg
+  local pkg status
 
   for pkg in "${pkgs[@]}"; do
-    if dpkg -s "$pkg" >/dev/null 2>&1; then
+    status="$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null || true)"
+    if [[ "$status" == "install ok installed" ]]; then
       bootstrap_log "Package '$pkg' is already installed, skipping."
     else
       to_install+=("$pkg")
@@ -35,6 +36,37 @@ apt_install_if_missing() {
   else
     bootstrap_log "All requested packages are already installed."
   fi
+}
+
+ensure_openssh_server_ready() {
+  if ! command -v sshd >/dev/null 2>&1; then
+    bootstrap_log "OpenSSH daemon is missing; installing openssh-server"
+    apt_install_if_missing openssh-server
+  fi
+
+  if [[ ! -f /etc/ssh/sshd_config ]]; then
+    bootstrap_log "OpenSSH server config is missing; reinstalling openssh-server to restore defaults"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall openssh-server
+  fi
+
+  if [[ ! -f /etc/ssh/sshd_config ]]; then
+    bootstrap_log "OpenSSH server config is still missing; writing a minimal baseline config"
+    install -d -m 755 /etc/ssh
+    cat >/etc/ssh/sshd_config <<'EOF'
+Include /etc/ssh/sshd_config.d/*.conf
+
+Port 22
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+AuthorizedKeysFile .ssh/authorized_keys
+Subsystem sftp /usr/lib/openssh/sftp-server
+EOF
+    chmod 0644 /etc/ssh/sshd_config
+    chown root:root /etc/ssh/sshd_config
+  fi
+
+  ssh-keygen -A
 }
 
 disable_cdrom_apt_sources() {
@@ -97,7 +129,7 @@ harden_sshd() {
   local ts
   ts="/root/ssh-backup-$(date +%Y%m%d_%H%M%S)"
   mkdir -p "$ts"
-  cp -a /etc/ssh/sshd_config "$ts/sshd_config"
+  [[ -f /etc/ssh/sshd_config ]] && cp -a /etc/ssh/sshd_config "$ts/sshd_config"
   cp -a /etc/ssh/sshd_config.d "$ts/sshd_config.d" 2>/dev/null || true
 
   install -d -m 755 /etc/ssh/sshd_config.d
@@ -202,6 +234,8 @@ main() {
   apt-get update -y
 
   apt_install_if_missing curl ca-certificates openssh-server ufw
+
+  ensure_openssh_server_ready
 
   bootstrap_log "Installing GitHub SSH keys"
   IFS=',' read -r -a users <<<"$SSH_BOOTSTRAP_USERS"
