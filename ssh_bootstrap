@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+# SSH bootstrap helper extracted from server_bootstrap
+set -euo pipefail
+
+GH_KEYS_URL="${GH_KEYS_URL:-https://github.com/Terrydaktal.keys}"
+SSH_BOOTSTRAP_USERS="${SSH_BOOTSTRAP_USERS:-root${SUDO_USER:+,$SUDO_USER}}"
+
+bootstrap_log() {
+  echo "[$(date -Is)] $*"
+}
+
+require_root() {
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    bootstrap_log "ERROR: run this script as root or via sudo"
+    exit 1
+  fi
+}
+
+apt_install_if_missing() {
+  local pkgs=("$@")
+  local to_install=()
+  local pkg
+
+  for pkg in "${pkgs[@]}"; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      bootstrap_log "Package '$pkg' is already installed, skipping."
+    else
+      to_install+=("$pkg")
+    fi
+  done
+
+  if [[ ${#to_install[@]} -gt 0 ]]; then
+    bootstrap_log "Installing missing packages: ${to_install[*]}"
+    apt-get install -y "${to_install[@]}"
+  else
+    bootstrap_log "All requested packages are already installed."
+  fi
+}
+
+install_github_keys_for_user() {
+  local user="$1" home
+  home="$(getent passwd "$user" | cut -d: -f6)"
+
+  if [[ -z "$home" || ! -d "$home" ]]; then
+    bootstrap_log "WARN: Cannot determine home directory for user: $user"
+    return 1
+  fi
+
+  bootstrap_log "Installing GitHub SSH keys for $user in $home/.ssh"
+  install -d -m 700 -o "$user" -g "$user" "$home/.ssh"
+  touch "$home/.ssh/authorized_keys"
+  chown "$user:$user" "$home/.ssh/authorized_keys"
+  chmod 600 "$home/.ssh/authorized_keys"
+
+  curl -fsSL "$GH_KEYS_URL" | while IFS= read -r k; do
+    [[ -z "$k" ]] && continue
+    grep -qxF "$k" "$home/.ssh/authorized_keys" || echo "$k" >> "$home/.ssh/authorized_keys"
+  done
+}
+
+harden_sshd() {
+  bootstrap_log "Hardening SSH daemon via /etc/ssh/sshd_config.d/00-ssh-bootstrap.conf"
+
+  local ts
+  ts="/root/ssh-backup-$(date +%Y%m%d_%H%M%S)"
+  mkdir -p "$ts"
+  cp -a /etc/ssh/sshd_config "$ts/sshd_config"
+  cp -a /etc/ssh/sshd_config.d "$ts/sshd_config.d" 2>/dev/null || true
+
+  install -d -m 755 /etc/ssh/sshd_config.d
+
+  local include_line="Include /etc/ssh/sshd_config.d/*.conf"
+
+  perl -0777 -i -pe '
+    s/^[ \t]*Include[ \t]+\/etc\/ssh\/sshd_config\.d\/\*\.conf[ \t]*\\R//gmi
+  ' /etc/ssh/sshd_config
+
+  sed -i "1i$include_line" /etc/ssh/sshd_config
+
+  perl -0777 -i -pe '
+    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM|PermitRootLogin|MaxAuthTries|LoginGraceTime|ClientAliveInterval|ClientAliveCountMax|X11Forwarding|AllowAgentForwarding|PermitTunnel)[ \t]+.*\\R//gmi
+  ' /etc/ssh/sshd_config
+
+  cat >/etc/ssh/sshd_config.d/00-ssh-bootstrap.conf <<'EOF'
+# --- Enforced by ssh_bootstrap ---
+
+# Keys-only auth
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+UsePAM yes
+PermitRootLogin prohibit-password
+
+# Brute-force / connection hygiene
+MaxAuthTries 10
+LoginGraceTime 20
+ClientAliveInterval 300
+ClientAliveCountMax 3
+
+# Reduce exposed features
+X11Forwarding no
+AllowAgentForwarding no
+PermitTunnel no
+EOF
+
+  chmod 0644 /etc/ssh/sshd_config.d/00-ssh-bootstrap.conf
+  chown root:root /etc/ssh/sshd_config.d/00-ssh-bootstrap.conf
+
+  sshd -t
+  systemctl enable --now ssh 2>/dev/null || systemctl enable --now sshd 2>/dev/null
+  systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
+
+  bootstrap_log "Effective SSH settings:"
+  sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|pubkeyauthentication|usepam|permitrootlogin|maxauthtries|logingracetime|clientaliveinterval|clientalivecountmax|x11forwarding|allowagentforwarding|permittunnel)\b'
+}
+
+configure_ufw_for_ssh() {
+  bootstrap_log "Configuring UFW for SSH access"
+
+  ufw default deny incoming
+  ufw default allow outgoing
+
+  if ufw status | grep -q "OpenSSH.*LIMIT"; then
+    bootstrap_log "UFW OpenSSH limit already present"
+  else
+    bootstrap_log "Applying UFW limit on OpenSSH"
+    ufw limit OpenSSH
+  fi
+
+  if ufw status | grep -q "^Status: inactive"; then
+    bootstrap_log "Enabling UFW"
+    ufw --force enable
+  fi
+
+  ufw status verbose || true
+}
+
+detect_internal_ip() {
+  local ip
+
+  ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}')"
+  if [[ -n "${ip:-}" ]]; then
+    echo "$ip"
+    return 0
+  fi
+
+  ip="$(ip -4 -o addr show scope global up 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')"
+  if [[ -n "${ip:-}" ]]; then
+    echo "$ip"
+    return 0
+  fi
+
+  ip="$(hostname -I 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i !~ /^127\./) {print $i; exit}}')"
+  if [[ -n "${ip:-}" ]]; then
+    echo "$ip"
+    return 0
+  fi
+
+  return 1
+}
+
+main() {
+  require_root
+
+  bootstrap_log "Updating package lists"
+  apt-get update -y
+
+  apt_install_if_missing curl ca-certificates openssh-server ufw
+
+  bootstrap_log "Installing GitHub SSH keys"
+  IFS=',' read -r -a users <<<"$SSH_BOOTSTRAP_USERS"
+  local user
+  for user in "${users[@]}"; do
+    [[ -z "$user" ]] && continue
+    if id "$user" >/dev/null 2>&1; then
+      install_github_keys_for_user "$user"
+    else
+      bootstrap_log "WARN: user '$user' does not exist, skipping key install"
+    fi
+  done
+
+  bootstrap_log "Applying SSH daemon hardening"
+  harden_sshd
+
+  bootstrap_log "Applying UFW SSH rule"
+  configure_ufw_for_ssh
+
+  local internal_ip
+  if internal_ip="$(detect_internal_ip)"; then
+    bootstrap_log "SSH is ready"
+    bootstrap_log "Internal IP: $internal_ip"
+    for user in "${users[@]}"; do
+      if [[ -n "$user" ]] && id "$user" >/dev/null 2>&1; then
+        bootstrap_log "Connect: ssh ${user}@${internal_ip}"
+      fi
+    done
+  else
+    bootstrap_log "SSH is ready"
+    bootstrap_log "WARN: Could not determine an internal IP automatically"
+  fi
+}
+
+main "$@"

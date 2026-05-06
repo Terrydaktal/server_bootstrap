@@ -2,6 +2,8 @@
 
 This document lists every action performed by the `server_bootstrap` script, categorized by the stack configuration selected during execution.
 
+For SSH-only setup, use `ssh_bootstrap`. It installs `openssh-server`, imports the GitHub SSH keys for `root` and the invoking sudo user when present, hardens `sshd`, enables UFW for OpenSSH, and prints the machine's internal IP at the end.
+
 ### Execution Log
 
 **(base)** Validates that only one stack (`--LAMP` or `--GAP`) is selected to prevent conflicts  
@@ -66,3 +68,4 @@ This document lists every action performed by the `server_bootstrap` script, cat
    - **LAMP**: `sudo ./server_bootstrap --LAMP`
    - **GAP**: `sudo ./server_bootstrap --GAP`
    - **Base Only**: `sudo ./server_bootstrap`
+   - **SSH Only**: `sudo ./ssh_bootstrap`
