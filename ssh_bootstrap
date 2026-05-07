@@ -144,7 +144,7 @@ harden_sshd() {
   sed -i "1i$include_line" /etc/ssh/sshd_config
 
   perl -0777 -i -pe '
-    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM|PermitRootLogin|MaxAuthTries|LoginGraceTime|ClientAliveInterval|ClientAliveCountMax|X11Forwarding|AllowAgentForwarding|PermitTunnel)[ \t]+.*\\R//gmi
+    s/^[ \t]*#?[ \t]*(PasswordAuthentication|KbdInteractiveAuthentication|ChallengeResponseAuthentication|PubkeyAuthentication|UsePAM|PermitRootLogin|MaxAuthTries|MaxStartups|LoginGraceTime|ClientAliveInterval|ClientAliveCountMax|X11Forwarding|AllowAgentForwarding|PermitTunnel)[ \t]+.*\\R//gmi
   ' /etc/ssh/sshd_config
 
   cat >/etc/ssh/sshd_config.d/00-ssh-bootstrap.conf <<'EOF'
@@ -159,7 +159,8 @@ UsePAM yes
 PermitRootLogin prohibit-password
 
 # Brute-force / connection hygiene
-MaxAuthTries 10
+MaxAuthTries 30
+MaxStartups 30:30:100
 LoginGraceTime 20
 ClientAliveInterval 300
 ClientAliveCountMax 3
@@ -178,7 +179,7 @@ EOF
   systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null
 
   bootstrap_log "Effective SSH settings:"
-  sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|pubkeyauthentication|usepam|permitrootlogin|maxauthtries|logingracetime|clientaliveinterval|clientalivecountmax|x11forwarding|allowagentforwarding|permittunnel)\b'
+  sshd -T | grep -Ei '^(passwordauthentication|kbdinteractiveauthentication|challengeresponseauthentication|pubkeyauthentication|usepam|permitrootlogin|maxauthtries|maxstartups|logingracetime|clientaliveinterval|clientalivecountmax|x11forwarding|allowagentforwarding|permittunnel)\b'
 }
 
 configure_ufw_for_ssh() {
@@ -188,10 +189,15 @@ configure_ufw_for_ssh() {
   ufw default allow outgoing
 
   if ufw status | grep -q "OpenSSH.*LIMIT"; then
-    bootstrap_log "UFW OpenSSH limit already present"
+    bootstrap_log "Removing UFW OpenSSH limit; ufw limit is fixed and cannot be set to 30 attempts"
+    ufw --force delete limit OpenSSH || true
+  fi
+
+  if ufw status | grep -q "OpenSSH.*ALLOW"; then
+    bootstrap_log "UFW OpenSSH allow rule already present"
   else
-    bootstrap_log "Applying UFW limit on OpenSSH"
-    ufw limit OpenSSH
+    bootstrap_log "Allowing OpenSSH through UFW"
+    ufw allow OpenSSH
   fi
 
   if ufw status | grep -q "^Status: inactive"; then
